@@ -1,0 +1,19 @@
+env: p2p_energy
+env_args:
+  map_name: "P2PEnergyEnv"
+  max_gen_power: 1
+  min_gen_power: -1
+  max_con_price: 1
+  min_con_price: 0.1
+  ind_max_gen_power: 3
+  ind_min_gen_power: 0.1 
+  ind_max_con_price: 3
+  ind_min_con_price: 0.1
+  max_steps: 1700
+  num_generators: 1       # Number of generators
+  num_consumers: 1             # Number of consumers
+ 
+mask_flag: False
+global_state_flag: False
+opp_action_in_cc: True
+agent_level_batch_update: False

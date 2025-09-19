@@ -1,0 +1,14 @@
+{
+  "agent_1": {
+    "consumer_profile": [1.0, 4.5, 3.2],  
+    "generator_profile": [4.0, 10.0, 0.1] 
+  },
+  "agent_2": {
+    "consumer_profile": [3.0, 3.5, 4.0],
+    "generator_profile": [1.0, 8.0, 0.2]
+  },
+  "agent_3": {
+    "consumer_profile": [1, 2.5, 1.0],
+    "generator_profile": [3, 4.0, 1.2]
+  }
+}
