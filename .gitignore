@@ -5,7 +5,7 @@ __pycache__/
 
 # Virtual environment
 .venv/
-venv/
+marlgrid_venv
 ENV/
 env/
 
@@ -14,6 +14,8 @@ env/
 
 # Experiment results
 exp_results/
+trained_policies/
+evaluated_policies/
 
 # OS specific
 .DS_Store

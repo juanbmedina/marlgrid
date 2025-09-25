@@ -1,7 +1,7 @@
 import numpy as np
 
 class EnergyAgent:
-    def __init__(self, name, n_agents, consumer_profile, generator_profile):
+    def __init__(self, name, n_agents, consumer_profile, generator_profile, cost_params):
         self.name = name
         self.agent_con = np.array(consumer_profile)
         self.agent_gen = np.array(generator_profile)
@@ -12,15 +12,26 @@ class EnergyAgent:
 
         self.n_agents = n_agents
 
-        self.state = np.array([8.1, 2.2, 10])
+        self.state = None
 
-        self.lambda_factor =  0.1
-        self.theta_factor = 0.1
-        self.beta_factor = 0.1
+        self.lambda_factor =  10  
+        self.theta_factor = 1/2
+        self.beta_factor = 1
 
-        self.a = 0.1
-        self.b = 0.1
-        self.c = 0 
+        self.buyer_id = None
+
+        self.a = cost_params[0]
+        self.b = cost_params[1]
+        self.c = cost_params[2]
+
+        self.grid_sell_price = 100
+        self.grid_buy_price = 50
+
+        self.ind_power_min = 0.0
+        self.ind_power_max = 100.0   # or based on generator capacity
+        # self.price_min = 0.01
+        # self.price_max = 1000.0
+
 
         self.calculate_agent_rol()
         self.calculate_net_profile() 
@@ -31,7 +42,7 @@ class EnergyAgent:
             gdr = self.agent_gen[t] / self.agent_con[t]
             self.rol.append(np.where(gdr > 1, 'S', np.where(gdr < 1, 'B', 'N')).tolist())
 
-    def get_new_state(self, t, action):
+    def get_new_state(self, t, action, num_sellers, num_buyers):
         """
         Construct agent state dynamically based on role at time t.
         powers: list of all agents' powers
@@ -39,14 +50,22 @@ class EnergyAgent:
         """
         if self.rol[t] == 'S':
             # Seller: state = [P_i,j ... , price_i] with mask [1,...,1,0]
-            mask = np.append(np.ones(self.n_agents-1),0)
+
+            mask = np.append(np.ones(num_buyers),0)
             self.state += mask*action
+
+            # Apply boundaries to power states
+            self.state[:-1] = np.clip(self.state[:-1], self.ind_power_min, self.ind_power_max)
+
             return self.state
         
         elif self.rol[t] == 'B':
             # Buyer: state = [P_i,j ... , price_i] with mask [0,...,0,1]
-            mask = np.append(np.zeros(self.n_agents-1),1)
+            mask = np.append(np.zeros(num_buyers),1)
             self.state += mask*action
+
+            # Apply boundaries to price state
+            self.state[-1] = np.clip(self.state[-1], self.grid_buy_price, self.grid_sell_price)
             return self.state
 
 
@@ -80,7 +99,7 @@ class EnergyAgent:
         
 
     def calculate_utility(self, t):
-        utility = self.lambda_factor*self.net[t] - (self.theta_factor/2)*self.net[t]**2
+        utility = self.lambda_factor*self.agent_con[t] - (self.theta_factor/2)*self.agent_con[t]**2
         return utility
     
     def get_seller_reward(self, power, price):
@@ -106,7 +125,6 @@ class EnergyAgent:
     def calculate_comp_resource(self, others_power, others_price):
         cr = self.beta_factor*sum(others_price)*sum(others_power)
         return cr
-    
 
 
     def __repr__(self):

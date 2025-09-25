@@ -2,6 +2,7 @@ import numpy as np
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from gym.spaces import Dict as GymDict, Box
 from marllib.envs.base_env import ENV_REGISTRY
+from marllib.envs.global_reward_env import COOP_ENV_REGISTRY
 from energy_env import P2PEnergyEnv
 
 
@@ -37,6 +38,7 @@ class RLlibEnergyEnv(MultiAgentEnv):
         return obs
 
     def step(self, action_dict):
+        # print("#### Acciones ####: ",action_dict)
         o, r, d, info = self.env.step(action_dict)
         obs = {}
         rewards = {}
@@ -52,7 +54,7 @@ class RLlibEnergyEnv(MultiAgentEnv):
     def close(self):
         self.env.close()
 
-    def render(self, mode=None):
+    def render(self, mode='human'):
         return self.env.render(mode=mode)
 
     def get_env_info(self):
@@ -68,3 +70,4 @@ class RLlibEnergyEnv(MultiAgentEnv):
 
 # Register with MARLlib
 ENV_REGISTRY["p2p_energy"] = RLlibEnergyEnv
+COOP_ENV_REGISTRY["p2p_energy"] = RLlibEnergyEnv
