@@ -11,7 +11,7 @@ policy_mapping_dict = {
     "P2PEnergyEnv": {
         "description": "peer-to-peer energy market with sellers and buyers",
         "team_prefix": ("agent_",),    # agents will be agent_0, agent_1, ...
-        "all_agents_one_policy": True,
+        "all_agents_one_policy": False,
         "one_agent_one_policy": True,
     }
 }

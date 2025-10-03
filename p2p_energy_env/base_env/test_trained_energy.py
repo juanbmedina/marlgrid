@@ -3,14 +3,14 @@ from utils import clean_folder, rename_and_move_result, copy_config_file
 import energy_wrapper  # Make sure this registers your env in ENV_REGISTRY
 
 EXP_FOLDER_NAME = "maa2c_mlp_P2PEnergyEnv"
-CHECK_NAME = "energy_market_adapted_1M-it_2025-09-24_21-21-20"
-CHECK_FOL = "checkpoint_000018"
-CHECK_NUM = "checkpoint-18"
+CHECK_NAME = "energy_market_2025-10-03_13-01-17"
+CHECK_FOL = "checkpoint_000083"
+CHECK_NUM = "checkpoint-83"
 
 FOLDER_TO_CLEAN = 'exp_results'
 TRAINING_OUTPUT_DIR = 'exp_results/maa2c_mlp_P2PEnergyEnv'  # where results are generated
 DESTINATION_ROOT = 'evaluated_policies/maa2c_mlp_P2PEnergyEnv'  # Where experiments are stored
-EXP_NAME = 'adapted_chacon'  # Change this to your experiment name
+EXP_NAME = 'energy_market_constrains'  # Change this to your experiment name
 CONFIG_FILE = 'energy.yaml'
 CONFIG_DIR = 'config/env_config'
 
@@ -34,7 +34,7 @@ algorithm.render(env, model,
             local_mode=True,
             num_gpus=1,
             num_workers=10,
-            share_policy="all",
+            share_policy="individual",
             checkpoint_end=False)
 
 rename_and_move_result(TRAINING_OUTPUT_DIR, DESTINATION_ROOT, EXP_NAME)

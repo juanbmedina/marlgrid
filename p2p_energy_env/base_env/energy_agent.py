@@ -19,6 +19,7 @@ class EnergyAgent:
         self.beta_factor = 1
 
         self.buyer_id = None
+        self.seller_id = None
 
         self.a = cost_params[0]
         self.b = cost_params[1]
@@ -28,7 +29,7 @@ class EnergyAgent:
         self.grid_buy_price = 50
 
         self.ind_power_min = 0.0
-        self.ind_power_max = 100.0   # or based on generator capacity
+        self.ind_power_max = 1.0   # or based on generator capacity
         # self.price_min = 0.01
         # self.price_max = 1000.0
 
@@ -52,21 +53,24 @@ class EnergyAgent:
             # Seller: state = [P_i,j ... , price_i] with mask [1,...,1,0]
 
             mask = np.append(np.ones(num_buyers),0)
-            self.state += mask*action
-
+            self.state += action
+            done = self.agent_in_range(t, 10e6)
             # Apply boundaries to power states
-            self.state[:-1] = np.clip(self.state[:-1], self.ind_power_min, self.ind_power_max)
+            # self.state[:-1] = np.clip(self.state[:-1], self.ind_power_min, self.ind_power_max)
 
-            return self.state
+            return done, self.state
         
         elif self.rol[t] == 'B':
             # Buyer: state = [P_i,j ... , price_i] with mask [0,...,0,1]
             mask = np.append(np.zeros(num_buyers),1)
-            self.state += mask*action
+            self.state += action
 
             # Apply boundaries to price state
-            self.state[-1] = np.clip(self.state[-1], self.grid_buy_price, self.grid_sell_price)
-            return self.state
+            self.state = np.clip(self.state, -1, 200)
+
+            done = self.agent_in_range(t, 10e6)
+
+            return done, self.state
 
 
     def calculate_net_profile(self):
@@ -88,16 +92,37 @@ class EnergyAgent:
             Hg = self.get_generation_costs(power)
             utility = self.calculate_utility(t)
             wellness = utility + reward - Hg
-            return wellness 
+            # print("Penalty: ", penalty)
+            return wellness
 
         elif self.rol[t] == 'B':
             reward = self.get_buyer_reward(power, price)
             utility = self.calculate_utility(t)
             comp_resource = self.calculate_comp_resource(others_power, others_price)
             wellness = utility + reward - comp_resource
-            return wellness 
+            # print("Penalty: ", penalty)
+            return wellness
         
+    def agent_in_range(self, t, penalty):
+        if self.rol[t] == 'S':
+            # Seller: state = [P_i,j ... , price_i] with mask [1,...,1,0]
 
+            in_range = (self.ind_power_min <= self.state) & (self.state <= self.ind_power_max)
+
+            if np.all(in_range):
+                return False
+            else: 
+                return True
+        
+        elif self.rol[t] == 'B':
+            # Buyer: state = [P_i,j ... , price_i] with mask [0,...,0,1]
+            in_range = (self.grid_buy_price <= self.state) & (self.state <= self.grid_sell_price)
+
+            if np.all(in_range):
+                return False
+            else: 
+                return True
+            
     def calculate_utility(self, t):
         utility = self.lambda_factor*self.agent_con[t] - (self.theta_factor/2)*self.agent_con[t]**2
         return utility
@@ -106,7 +131,7 @@ class EnergyAgent:
         if isinstance(price, np.ndarray):
             reward = 0
             for i in range(len(power)):
-                reward += power[i]/np.log(1+price[i]+0.001)
+                reward += power[i]/np.log(1+1/1000*price[i]+0.001)
             return -reward 
         else:
             raise TypeError("The seller price must be a np.ndarray")
@@ -117,7 +142,7 @@ class EnergyAgent:
     
     def get_buyer_reward(self, power, price):
         if isinstance(price, float):   # más pythonic que type(price)==float
-            reward = sum(power) / np.log(price + 1)
+            reward = sum(power) / np.log(price + 1 +0.001)
             return reward
         else:
             raise TypeError("The seller price must be a float number")

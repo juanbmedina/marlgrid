@@ -2,31 +2,11 @@
   "agent_1": {
     "consumer_profile": [1.24, 3.34],  
     "generator_profile": [2.0, 2.0],
-    "cost_params": [1, 1, 1]
+    "cost_params": [0.089, 52, 4.5]
   },
   "agent_2": {
-    "consumer_profile": [1.24, 3.34],  
-    "generator_profile": [2.0, 2.0],
-    "cost_params": [1, 1, 1]
-  },
-  "agent_3": {
-    "consumer_profile": [1.24, 3.34],  
-    "generator_profile": [1.0, 2.0],
-    "cost_params": [1, 1, 1]
-  },
-  "agent_4": {
-    "consumer_profile": [1.24, 3.34],  
-    "generator_profile": [2.0, 2.0],
-    "cost_params": [1, 1, 1]
-  },
-  "agent_5": {
-    "consumer_profile": [1.24, 3.34],  
-    "generator_profile": [1.0, 2.0],
-    "cost_params": [1, 1, 1]
-  },
-  "agent_6": {
-    "consumer_profile": [1.24, 3.34],  
-    "generator_profile": [2.0, 2.0],
-    "cost_params": [1, 1, 1]
+    "consumer_profile": [3.17, 1.06],  
+    "generator_profile": [0.30, 0.48],
+    "cost_params": [0.0, 37, 10.2]
   }
 }
