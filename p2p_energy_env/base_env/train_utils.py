@@ -54,3 +54,25 @@ def copy_config_file(src_filename, config_dir='path/to/your/config/dir'):
         print(f"Copied '{src_filename}' to MARLlib config directory.")
     except Exception as e:
         print(f"Error copying file: {e}")
+
+def copy_hyperparams_file(env_name, src_filename, config_dir='path/to/your/config/dir'):
+    # Define source and target paths
+    src_path = os.path.join(config_dir, src_filename)
+    dst_dir = f'/opt/conda/lib/python3.8/site-packages/marllib/marl/algos/hyperparams/finetuned/{env_name}'
+    dst_path = os.path.join(dst_dir, src_filename)
+
+    # Check that the file exists
+    if not os.path.exists(src_path):
+        print(f"Source file does not exist: {src_path}")
+        return
+
+    # Create the target directory if it doesn't exist (optional)
+    if not os.path.exists(dst_dir):
+        os.makedirs(dst_dir, exist_ok=True)
+
+    # Copy the file
+    try:
+        shutil.copy2(src_path, dst_path)
+        print(f"Copied '{src_filename}' to MARLlib config directory.")
+    except Exception as e:
+        print(f"Error copying file: {e}")

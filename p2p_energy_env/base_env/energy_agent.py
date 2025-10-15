@@ -18,6 +18,8 @@ class EnergyAgent:
         self.theta_factor = 1/2
         self.beta_factor = 1
 
+        self.group_name = None
+
         self.buyer_id = None
         self.seller_id = None
 
@@ -28,8 +30,8 @@ class EnergyAgent:
         self.grid_sell_price = 100
         self.grid_buy_price = 50
 
-        self.ind_power_min = 0.0
-        self.ind_power_max = 1.0   # or based on generator capacity
+        self.ind_power_min = 0.1
+        self.ind_power_max = 0.9   # or based on generator capacity
         # self.price_min = 0.01
         # self.price_max = 1000.0
 
@@ -56,7 +58,9 @@ class EnergyAgent:
             self.state += action
             done = self.agent_in_range(t, 10e6)
             # Apply boundaries to power states
-            # self.state[:-1] = np.clip(self.state[:-1], self.ind_power_min, self.ind_power_max)
+            self.state = np.clip(self.state, self.ind_power_min, self.ind_power_max)
+            # self.state = np.clip(self.state, 0, 1)
+            # self.state = np.clip(sum(self.state), 0, self.net[t])
 
             return done, self.state
         
@@ -66,8 +70,9 @@ class EnergyAgent:
             self.state += action
 
             # Apply boundaries to price state
-            self.state = np.clip(self.state, -1, 200)
-
+            self.state = np.clip(self.state, self.grid_buy_price, self.grid_sell_price)
+            # self.state = np.clip(sum(self.state), 0, self.net(t))
+            # self.state = np.clip(self.state, 40, 110)
             done = self.agent_in_range(t, 10e6)
 
             return done, self.state
@@ -107,7 +112,7 @@ class EnergyAgent:
         if self.rol[t] == 'S':
             # Seller: state = [P_i,j ... , price_i] with mask [1,...,1,0]
 
-            in_range = (self.ind_power_min <= self.state) & (self.state <= self.ind_power_max)
+            in_range = (self.ind_power_min < self.state) & (self.state < self.ind_power_max)
 
             if np.all(in_range):
                 return False
@@ -116,7 +121,7 @@ class EnergyAgent:
         
         elif self.rol[t] == 'B':
             # Buyer: state = [P_i,j ... , price_i] with mask [0,...,0,1]
-            in_range = (self.grid_buy_price <= self.state) & (self.state <= self.grid_sell_price)
+            in_range = (self.grid_buy_price < self.state) & (self.state < self.grid_sell_price)
 
             if np.all(in_range):
                 return False

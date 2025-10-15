@@ -2,14 +2,14 @@ from marllib import marl
 from utils import clean_folder, rename_and_move_result, copy_config_file
 import energy_wrapper  # Make sure this registers your env in ENV_REGISTRY
 
-EXP_FOLDER_NAME = "maa2c_mlp_P2PEnergyEnv"
-CHECK_NAME = "energy_market_2025-10-03_13-01-17"
-CHECK_FOL = "checkpoint_000083"
-CHECK_NUM = "checkpoint-83"
+EXP_FOLDER_NAME = "maa2c_lstm_P2PEnergyEnv"
+CHECK_NAME = "energy_market_2025-10-15_16-13-13"
+CHECK_FOL = "checkpoint_000120"
+CHECK_NUM = "checkpoint-120"
 
 FOLDER_TO_CLEAN = 'exp_results'
-TRAINING_OUTPUT_DIR = 'exp_results/maa2c_mlp_P2PEnergyEnv'  # where results are generated
-DESTINATION_ROOT = 'evaluated_policies/maa2c_mlp_P2PEnergyEnv'  # Where experiments are stored
+TRAINING_OUTPUT_DIR = 'exp_results/maa2c_lstm_P2PEnergyEnv'  # where results are generated
+DESTINATION_ROOT = 'evaluated_policies/maa2c_lstm_P2PEnergyEnv'  # Where experiments are stored
 EXP_NAME = 'energy_market_constrains'  # Change this to your experiment name
 CONFIG_FILE = 'energy.yaml'
 CONFIG_DIR = 'config/env_config'
@@ -21,9 +21,9 @@ copy_config_file(CONFIG_FILE, config_dir=CONFIG_DIR)
 env = marl.make_env(environment_name="p2p_energy", map_name="P2PEnergyEnv")
 
 # Step 2: Initialize the algorithm and load hyperparameters
-algorithm = marl.algos.maa2c(hyperparam_source="common")
+algorithm = marl.algos.maa2c(hyperparam_source="p2p_energy")
 # customize model
-model = marl.build_model(env, algorithm, {"core_arch": "mlp", "encode_layer": "128-128"})
+model = marl.build_model(env, algorithm, {"core_arch": "lstm"})
 
 # rendering
 algorithm.render(env, model,

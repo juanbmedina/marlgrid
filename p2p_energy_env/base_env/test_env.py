@@ -9,29 +9,35 @@ def test_environment(num_steps=5):
     obs = env.reset()
     actions_dict = {}
 
-    print("=== ACTION SPACES ===")
-    print(env.action_spaces)
+    # print("=== ACTION SPACES ===")
+    # print(env.action_spaces)
 
     print("=== INITIAL OBSERVATION ===")
     print(f"Global Obs: {obs}")
 
     print("\n=== RUNNING TEST EPISODE ===")
-    seller_state = 0.5
-    buyer_state = 100
-    for seller in env.sellers:
-        seller.state = np.array([seller_state/2, seller_state/2])
-        actions_dict[seller.name] = 4
-    
-    for buyer in env.buyers:
-        buyer.state = buyer_state
-        actions_dict[buyer.name] = 1
+    seller_state = 0.7
+    buyer_state = 50 
+
+    seller_state = [[0.51, 0.24], [1.48, 0.35], [0.53, 0.24], [0.35, 0.20]]
+    buyer_state = [60.22, 50.04]
+
+    for i, seller in enumerate(env.sellers):
+        seller.state = np.array([seller_state[i][0], seller_state[i][1]])
+        actions_dict[seller.group_name] = [0.0, 0.0]
+
+    for i, buyer in enumerate(env.buyers):
+        buyer.state = buyer_state[i]
+        actions_dict[buyer.group_name] =  [0.0, 0.0]
 
     o, r, d , _ = env.step(actions_dict)
 
     print("=== FINAL OBSERVATION ===")
     print(f"Global Obs: {o}")
     print(f"Reward: {r}")
-    print(f"Reward: {np.mean(list(r.values()))}")
+    print(f"Reward: {d}")
+
+    # env.evaluate_constraints(0)
 
 
     print("\n=== TEST FINISHED ===")
