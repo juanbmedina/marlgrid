@@ -79,7 +79,7 @@ Demonstrates how to train the environment using **MARLlib**’s **MAA2C** algori
 ## 📦 Installation
 
 ```bash
-git clone https://github.com/yourusername/MARLGrid.git
+git clone https://github.com/juanbmedina/MARLGrid.git
 cd MARLGrid
 python3 -m venv venv
 source venv/bin/activate
