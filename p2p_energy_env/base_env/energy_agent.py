@@ -57,8 +57,19 @@ class EnergyAgent:
             mask = np.append(np.ones(num_buyers),0)
             self.state += action
             done = self.agent_in_range(t, 10e6)
+
             # Apply boundaries to power states
             self.state = np.clip(self.state, self.ind_power_min, self.ind_power_max)
+
+            # Apply constrain (8)
+
+            # original_state =  self.state.copy()
+
+            # total_state = sum(self.state)
+            
+            # if not (0 < total_state and total_state <= self.net[t]):
+            #     self.state = original_state
+            # self.state = np.clip(self.state, self.ind_power_min, self.net[t])
             # self.state = np.clip(self.state, 0, 1)
             # self.state = np.clip(sum(self.state), 0, self.net[t])
 
@@ -96,6 +107,9 @@ class EnergyAgent:
             reward = self.get_seller_reward(power, price)
             Hg = self.get_generation_costs(power)
             utility = self.calculate_utility(t)
+            # print(f"utility: {utility}")
+            # print(f"Hg: {Hg}")
+            # print(f"reward: {reward}")
             wellness = utility + reward - Hg
             # print("Penalty: ", penalty)
             return wellness
@@ -104,6 +118,9 @@ class EnergyAgent:
             reward = self.get_buyer_reward(power, price)
             utility = self.calculate_utility(t)
             comp_resource = self.calculate_comp_resource(others_power, others_price)
+            # print(f"utility: {utility}")
+            # print(f"Comp resource: {comp_resource}")
+            # print(f"reward: {reward}")
             wellness = utility + reward - comp_resource
             # print("Penalty: ", penalty)
             return wellness

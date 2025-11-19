@@ -20,7 +20,7 @@ class P2PEnergyEnv(ParallelEnv):
 
     def __init__(self):
 
-        json_path = '/workspace/marlgrid/base_env/profiles/agents_profiles.json'
+        json_path = '/workspace/marlgrid/base_env/profiles/agents_profiles2.json'
 
         with open(json_path, 'r') as f:
             data = json.load(f)
@@ -126,6 +126,8 @@ class P2PEnergyEnv(ParallelEnv):
         self.current_step = 0
         global_state = []
         obs = {}
+        self.previous_wellness = {}
+
 
         self.dones = {a.group_name: False for a in self.agents}
 
@@ -158,9 +160,9 @@ class P2PEnergyEnv(ParallelEnv):
         global_state = []
         obs = {}
         rewards = {}
-        agents_rewards = {}
         self.current_agents = []
         agent_out = {a.group_name: False for a in self.agents}
+        wellness = {}
 
         self.sellers, self.buyers = self.split_agents(t)
 
@@ -192,28 +194,43 @@ class P2PEnergyEnv(ParallelEnv):
             if not self.dones[seller.group_name]:
                 obs[seller.group_name] = {"obs": np.array(global_state, dtype=np.float64).flatten()}
                 others_power,others_price = self.get_others_power_price(seller, global_state)
-                reward = seller.get_wellness(t,seller.state,buyer_prices,others_power,others_price)
-                # print(seller.group_name, cost_fairness_reward)
-                agents_rewards[seller.group_name] = reward 
-        # cost_fairness_penalty = self.evaluate_cost_fairness()
+                wellness[seller.group_name] = seller.get_wellness(t,seller.state,buyer_prices,others_power,others_price)
+        
         for buyer in self.buyers:
             if not self.dones[buyer.group_name]:
                 obs[buyer.group_name] = {"obs": np.array(global_state, dtype=np.float64).flatten()}
                 seller_power = self.get_sellers_power(t, buyer)
                 others_selers_power = self.get_others_sellers_power(t, buyer)
                 others_power,others_price = self.get_others_power_price(seller, global_state)
-                reward = buyer.get_wellness(t,seller_power, float(buyer.state),others_selers_power,others_price)
-                agents_rewards[buyer.group_name] = reward
+                wellness[buyer.group_name] = buyer.get_wellness(t,seller_power, float(buyer.state),others_selers_power,others_price)
 
-
-        self.current_step += 1
 
         constraint_reward = self.evaluate_constraints(t)
-        # print(constraint_reward)
+        cost_fairness_penalty = self.evaluate_cost_fairness()
 
-        for agent in self.agents:
-            if not self.dones[agent.group_name]:
-                agents_rewards[agent.group_name] += 1000 * constraint_reward 
+        for seller in self.sellers:
+            if not self.dones[seller.group_name]:
+                wellness[seller.group_name] += 1000 * constraint_reward 
+        
+        for buyer in self.buyers:
+            if not self.dones[buyer.group_name]:
+                wellness[buyer.group_name] += 1000 * cost_fairness_penalty 
+
+        # for agent in self.agents:
+        #     if not self.dones[buyer.group_name]:
+        #         wellness[buyer.group_name] += 1000 * constraint_reward
+                
+        if self.current_step ==  0:
+            self.previous_wellness = wellness
+
+        for seller in self.sellers:
+            if not self.dones[seller.group_name]:
+                rewards[seller.group_name] = (wellness[seller.group_name]**2 - self.previous_wellness[seller.group_name]**2)/100
+        
+        for buyer in self.buyers:
+            if not self.dones[buyer.group_name]:
+                rewards[buyer.group_name] = (wellness[buyer.group_name]**2 - self.previous_wellness[buyer.group_name]**2)/100
+
 
         ################### ACTIVE AGENTS ###################
         for agent in self.agents:
@@ -227,12 +244,11 @@ class P2PEnergyEnv(ParallelEnv):
         # Global done
         self.dones["__all__"] = all(self.dones[a.group_name] for a in self.agents)
 
-
-        rewards = agents_rewards
-
         dones = self.dones
 
-        return obs, rewards, dones , {}
+        self.current_step += 1
+
+        return obs, wellness, dones , {}
     
     def evaluate_constraints(self, t):
         total_demand = sum(b.net[t] for b in self.buyers)
@@ -266,7 +282,7 @@ class P2PEnergyEnv(ParallelEnv):
                 total_cost += buyer.state * seller.state[buyer.buyer_id]
             # print(f"{seller.group_name} total_cost: {total_cost}, Hg: {Hg}" )
             if Hg <= total_cost:
-                penalty = np.exp(-1*(total_cost-Hg))
+                penalty = np.exp(-10*(total_cost-Hg))
             else:
                 penalty = 1
 

@@ -19,15 +19,20 @@ def test_environment(num_steps=5):
     seller_state = 0.7
     buyer_state = 50 
 
-    seller_state = [[0.51, 0.24], [1.48, 0.35], [0.53, 0.24], [0.35, 0.20]]
+    # seller_state = [[0.51, 0.24], [1.48, 0.35], [0.53, 0.24], [0.35, 0.20]]
+    # buyer_state = [60.22, 50.04]
+
+    seller_state = [[0.5, 0.5], [0.5, 0.5], [0.53, 0.24], [0.35, 0.20]]
     buyer_state = [60.22, 50.04]
 
     for i, seller in enumerate(env.sellers):
         seller.state = np.array([seller_state[i][0], seller_state[i][1]])
+        print("seller net: ", seller.net[0])
         actions_dict[seller.group_name] = [0.0, 0.0]
 
     for i, buyer in enumerate(env.buyers):
         buyer.state = buyer_state[i]
+        print("buyer buy: ", buyer.net[0])
         actions_dict[buyer.group_name] =  [0.0, 0.0]
 
     o, r, d , _ = env.step(actions_dict)
