@@ -3,18 +3,18 @@ from utils import clean_folder, rename_and_move_result, copy_config_file
 import energy_wrapper  # Make sure this registers your env in ENV_REGISTRY
 
 EXP_FOLDER_NAME = "maa2c_mlp_P2PEnergyEnv"
-CHECK_NAME = "4C_2B_2cons_2025-10-30_12-54-08"
-CHECK_FOL = "checkpoint_000107"
-CHECK_NUM = "checkpoint-107"
+CHECK_NAME = "lim_state_space_2025-11-20_13-44-52"
+CHECK_FOL = "checkpoint_000073"
+CHECK_NUM = "checkpoint-73"
 
 FOLDER_TO_CLEAN = 'exp_results'
 TRAINING_OUTPUT_DIR = 'exp_results/maa2c_mlp_P2PEnergyEnv'  # where results are generated
 DESTINATION_ROOT = 'evaluated_policies/maa2c_mlp_P2PEnergyEnv'  # Where experiments are stored
-EXP_NAME = '4C_2B_2cons'  # Change this to your experiment name
+EXP_NAME = 'lim_state_space'  # Change this to your experiment name
 CONFIG_FILE = 'energy.yaml'
 CONFIG_DIR = 'config/env_config'
 
-clean_folder(FOLDER_TO_CLEAN)
+clean_folder(FOLDER_TO_CLEAN)       
 copy_config_file(CONFIG_FILE, config_dir=CONFIG_DIR)
 
 # Step 1: Create your custom environment

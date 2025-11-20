@@ -3,50 +3,27 @@ from energy_env import P2PEnergyEnv
 import matplotlib.pyplot as plt
 from energy_agent import EnergyAgent
 
-def test_environment(num_steps=5):
-    # Initialize environment
+def constrain_test():
     env = P2PEnergyEnv()
     obs = env.reset()
+
     actions_dict = {}
 
-    # print("=== ACTION SPACES ===")
-    # print(env.action_spaces)
-
-    print("=== INITIAL OBSERVATION ===")
-    print(f"Global Obs: {obs}")
-
-    print("\n=== RUNNING TEST EPISODE ===")
-    seller_state = 0.7
-    buyer_state = 50 
-
-    # seller_state = [[0.51, 0.24], [1.48, 0.35], [0.53, 0.24], [0.35, 0.20]]
-    # buyer_state = [60.22, 50.04]
-
-    seller_state = [[0.5, 0.5], [0.5, 0.5], [0.53, 0.24], [0.35, 0.20]]
-    buyer_state = [60.22, 50.04]
-
     for i, seller in enumerate(env.sellers):
-        seller.state = np.array([seller_state[i][0], seller_state[i][1]])
-        print("seller net: ", seller.net[0])
-        actions_dict[seller.group_name] = [0.0, 0.0]
+        actions_dict[seller.group_name] = [0.02,0]
+        print(f"Seller {seller.group_name} state:  {seller.state}")
 
     for i, buyer in enumerate(env.buyers):
-        buyer.state = buyer_state[i]
-        print("buyer buy: ", buyer.net[0])
-        actions_dict[buyer.group_name] =  [0.0, 0.0]
+        actions_dict[buyer.group_name] = [1,0]
+        print(f"Buyer {buyer.group_name} state:  {buyer.state}")
+        
+    _, rewards, _, _ = env.step(actions_dict)
 
-    o, r, d , _ = env.step(actions_dict)
+    for i, seller in enumerate(env.sellers):
+        print(f"Seller {seller.name} state:  {seller.state}")
 
-    print("=== FINAL OBSERVATION ===")
-    print(f"Global Obs: {o}")
-    print(f"Reward: {r}")
-    print(f"Reward: {d}")
-
-    # env.evaluate_constraints(0)
-
-
-    print("\n=== TEST FINISHED ===")
-
+    for i, buyer in enumerate(env.buyers):
+        print(f"Buyer {buyer.name} state:  {buyer.state}")
 
 
 def plot_agents_heatmaps(num_points=50, filename="agents_reward_heatmaps.png"):
@@ -299,7 +276,8 @@ def test_rewards():
 
 
 if __name__ == "__main__":
-    test_environment(num_steps=3)
+    constrain_test()
+    # test_environment(num_steps=3)
     # plot_agents_heatmaps(num_points=50, filename="all_agents_heatmaps.png")
 
 

@@ -30,7 +30,7 @@ class EnergyAgent:
         self.grid_sell_price = 100
         self.grid_buy_price = 50
 
-        self.ind_power_min = 0.1
+        self.ind_power_min = 0.0
         self.ind_power_max = 0.9   # or based on generator capacity
         # self.price_min = 0.01
         # self.price_max = 1000.0
@@ -53,25 +53,22 @@ class EnergyAgent:
         """
         if self.rol[t] == 'S':
             # Seller: state = [P_i,j ... , price_i] with mask [1,...,1,0]
-
-            mask = np.append(np.ones(num_buyers),0)
             self.state += action
-            done = self.agent_in_range(t, 10e6)
+            # done = self.agent_in_range(t, 10e6)
 
             # Apply boundaries to power states
             self.state = np.clip(self.state, self.ind_power_min, self.ind_power_max)
 
             # Apply constrain (8)
 
-            # original_state =  self.state.copy()
+            original_state =  self.state.copy()
 
-            # total_state = sum(self.state)
+            total_state = sum(self.state)
             
-            # if not (0 < total_state and total_state <= self.net[t]):
-            #     self.state = original_state
-            # self.state = np.clip(self.state, self.ind_power_min, self.net[t])
-            # self.state = np.clip(self.state, 0, 1)
-            # self.state = np.clip(sum(self.state), 0, self.net[t])
+            if 0 < total_state and total_state <= self.net[t]:
+                done = False
+            else:
+                done = True
 
             return done, self.state
         
