@@ -20,7 +20,7 @@ class P2PEnergyEnv(ParallelEnv):
 
     def __init__(self):
 
-        json_path = '/workspace/marlgrid/base_env/profiles/agents_profiles2.json'
+        json_path = '/workspace/marlgrid/base_env/profiles/agents_profiles.json'
 
         with open(json_path, 'r') as f:
             data = json.load(f)
@@ -45,6 +45,7 @@ class P2PEnergyEnv(ParallelEnv):
         for seller in self.sellers:
             seller.group_name = 'seller_' + str(seller_id)
             seller_id += 1
+            seller.lagrange = np.array([0.0, 0.0]) 
         
         buyer_id = 0 
         for buyer in self.buyers:
@@ -68,18 +69,6 @@ class P2PEnergyEnv(ParallelEnv):
 
         ############################ Sellers actions space ############################
 
-        # # Build action deltas: first num_buyers dims = power_step, last dim = price_step
-        # seller_steps = [[-self.power_step, 0, self.power_step]] * num_buyers
-
-        # # Cartesian product across dimensions
-        # all_seller_combinations = list(itertools.product(*seller_steps))
-
-        # self.action_to_delta_sellers = {idx: list(combo) for idx, combo in enumerate(all_seller_combinations)}
-
-        # # Action spaces: 3 discrete actions (decrease, stay, increase)
-        # for seller in self.sellers:
-        #     self.action_spaces[seller.name] = Discrete(len(self.action_to_delta_sellers))
-
         for agent in self.agents:
             self.action_spaces[agent.name] = Box(
                                                 low=-self.power_step,
@@ -88,30 +77,18 @@ class P2PEnergyEnv(ParallelEnv):
                                                 dtype=np.float32
                                             )
 
-
-        ############################ Buyers actions space ############################
-
-        self.action_to_delta_buyers = {0: -self.price_step,
-                                       1: -self.price_step,
-                                       2: -self.price_step,
-                                       3: 0.0,
-                                       4: 0.0,
-                                       5: 0.0,
-                                       6: self.price_step,
-                                       7: self.price_step,
-                                       8: self.price_step,}
-                                       
-                                       
-        
-        # Action spaces: 3 discrete actions (decrease, stay, increase)
-        # for buyer in self.buyers:
-        #     self.action_spaces[buyer.name] = Discrete(len(self.action_to_delta_buyers))
-
-
         self.t = 0
         self.max_steps = 100
         self.current_step = 0
         self.iter_count = 0
+
+        # === Dual ascent parameters ===
+        self.lambda_alpha = 0.1          # learning rate para actualización dual
+        self.lambda_clip_min = 0.0
+        self.lambda_clip_max = 1000.0     # límite superior para evitar explosiones
+        self.cost_threshold = 0.0         # d en J_C - d <= 0
+        self.cost_ma_alpha = 0.05         # suavizado EMA para la violación
+
 
         # Save printed states
         self.csv_initialized = False
@@ -137,10 +114,15 @@ class P2PEnergyEnv(ParallelEnv):
             s1 = round(np.random.choice(self.seller_state),1)
             s2 = round(np.random.choice(self.seller_state),1)
             seller.state = np.array([s1, s2]) 
+            seller.lagrange = np.array([0.0, 0.0, 0.0]) 
+            seller.cost_ma = 0.0                    # NEW
             global_state = np.concatenate((global_state, seller.state), axis = 0)
 
+
         for buyer in self.buyers:
-            buyer.state =  round(np.random.choice(self.buyer_state),0)
+            buyer.state =  round(np.random.choice(self.buyer_state),0) 
+            buyer.lagrange = np.array([0.0, 0.0])
+            buyer.cost_ma = 0.0  
             global_state = np.append(global_state, buyer.state)
 
 
@@ -148,7 +130,6 @@ class P2PEnergyEnv(ParallelEnv):
             obs[seller.group_name] = {"obs": np.array(global_state, dtype=np.float64).flatten()}
         for buyer in self.buyers:
             obs[buyer.group_name] = {"obs": np.array(global_state, dtype=np.float64).flatten()}
-
 
         return obs
 
@@ -169,67 +150,84 @@ class P2PEnergyEnv(ParallelEnv):
         num_sellers = len(self.sellers)
         num_buyers = len(self.buyers)
 
-        buyer_prices = self.get_buyers_price(t)
-        
+        P = np.zeros([num_sellers, num_buyers])
+        C = np.zeros([num_buyers])
 
         ################### TAKE ACTIONS ###################
         for seller in self.sellers:
             if not self.dones[seller.group_name]:
                 delta = action_dict[seller.group_name]
-                done, seller.state = seller.get_new_state(t, delta, num_sellers, num_buyers)
+                done, seller.state = seller.get_new_state(t, delta[:1])
                 # self.dones[seller.group_name] = done
                 # agent_out[seller.group_name] = done
             global_state = np.concatenate((global_state, seller.state), axis=0)
+            P[seller.seller_id] = seller.state 
 
         for buyer in self.buyers:
             if not self.dones[buyer.group_name]:
                 delta = action_dict[buyer.group_name]
-                done, buyer.state = buyer.get_new_state(t, delta[0]*10, num_sellers, num_buyers)
+                done, buyer.state = buyer.get_new_state(t, delta[0]*10)
                 # self.dones[buyer.group_name] = done
                 # agent_out[buyer.group_name] = done
             global_state = np.append(global_state, buyer.state)
+            C[buyer.buyer_id] = buyer.state
+        
+        comm_penalty = self.check_community_constraints(t)
 
         ################### REWARD AND OBSERVATIONS ###################
         for seller in self.sellers:
+            penalty2 = 0
             if not self.dones[seller.group_name]:
                 obs[seller.group_name] = {"obs": np.array(global_state, dtype=np.float64).flatten()}
-                others_power,others_price = self.get_others_power_price(seller, global_state)
-                wellness[seller.group_name] = seller.get_wellness(t,seller.state,buyer_prices,others_power,others_price)
+                penalty1 = self.check_power_constrain_seller(t,P,seller) 
+                for buyer in self.buyers:
+                    penalty2 += self.check_power_constrain_buyer(t, P, buyer)
+                l1 = seller.lagrange[0]
+                l2 = seller.lagrange[1]
+                l3 = seller.lagrange[2]
+                wellness[seller.group_name] = seller.get_wellness(t,P,C) - (l1*penalty1 + l2*penalty2 + l3*comm_penalty)
         
         for buyer in self.buyers:
             if not self.dones[buyer.group_name]:
                 obs[buyer.group_name] = {"obs": np.array(global_state, dtype=np.float64).flatten()}
-                seller_power = self.get_sellers_power(t, buyer)
-                others_selers_power = self.get_others_sellers_power(t, buyer)
-                others_power,others_price = self.get_others_power_price(seller, global_state)
-                wellness[buyer.group_name] = buyer.get_wellness(t,seller_power, float(buyer.state),others_selers_power,others_price)
-
-
-        constraint_reward = self.evaluate_constraints(t)
-        cost_fairness_penalty = self.evaluate_cost_fairness()
-
-        for seller in self.sellers:
-            if not self.dones[seller.group_name]:
-                wellness[seller.group_name] += 1000 * constraint_reward 
+                penalty3 = self.check_cost_constrain(P,C)
+                l4 = buyer.lagrange[0]
+                wellness[buyer.group_name] = buyer.get_wellness(t,P,C) - (l4*penalty3)
         
-        for buyer in self.buyers:
-            if not self.dones[buyer.group_name]:
-                wellness[buyer.group_name] += 1000 * cost_fairness_penalty 
+        # === DUAL ASCENT UPDATE (Lagrangian primal-dual RL) ===
 
-        # for agent in self.agents:
-        #     if not self.dones[buyer.group_name]:
-        #         wellness[buyer.group_name] += 1000 * constraint_reward
-                
-        if self.current_step ==  0:
-            self.previous_wellness = wellness
-
+        # --- Sellers ---
         for seller in self.sellers:
-            if not self.dones[seller.group_name]:
-                rewards[seller.group_name] = (wellness[seller.group_name]**2 - self.previous_wellness[seller.group_name]**2)/100
-        
+
+            # Actualización dual λ_power
+            seller.lagrange[0] += self.lambda_alpha * (penalty1 - self.cost_threshold)
+            seller.lagrange[1] += self.lambda_alpha * (penalty2 - self.cost_threshold)
+            seller.lagrange[2] += self.lambda_alpha * (comm_penalty - self.cost_threshold)
+
+            # Aplicar clipping
+            seller.lagrange[0] = np.clip(
+                seller.lagrange[0],
+                self.lambda_clip_min,
+                self.lambda_clip_max
+            )
+            
+            seller.lagrange[1] = np.clip(
+                seller.lagrange[1],
+                self.lambda_clip_min,
+                self.lambda_clip_max
+            )
+
+        # --- Buyers ---
         for buyer in self.buyers:
-            if not self.dones[buyer.group_name]:
-                rewards[buyer.group_name] = (wellness[buyer.group_name]**2 - self.previous_wellness[buyer.group_name]**2)/100
+
+            buyer.lagrange[0] += self.lambda_alpha * (penalty3 - self.cost_threshold)
+
+            buyer.lagrange = np.clip(
+                buyer.lagrange,
+                self.lambda_clip_min,
+                self.lambda_clip_max
+            )
+
 
 
         ################### ACTIVE AGENTS ###################
@@ -250,7 +248,27 @@ class P2PEnergyEnv(ParallelEnv):
 
         return obs, wellness, dones , {}
     
-    def evaluate_constraints(self, t):
+    def check_power_constrain_seller(self, t, P, seller):
+        penalty= sum(P[seller.seller_id])-seller.net[t]
+        return penalty
+
+    def check_power_constrain_buyer(self, t, P, buyer):
+        penalty = sum(P[:,buyer.buyer_id])-buyer.net[t]
+        return penalty
+    
+    def check_cost_constrain(self, P, C):
+        penalty = 0 
+        for seller in self.sellers:
+            Hg = seller.get_generation_costs(seller.state)
+            cost = 0
+            for i in range(len(C)):
+                cost += C[i]*P[seller.seller_id, i]
+            
+            penalty += Hg - cost
+
+        return penalty
+    
+    def check_community_constraints(self, t):
         total_demand = sum(b.net[t] for b in self.buyers)
         total_gen = sum(s.net[t] for s in self.sellers)
         total_power = sum(sum(s.state) for s in self.sellers)
@@ -261,12 +279,14 @@ class P2PEnergyEnv(ParallelEnv):
         target = min(total_gen, total_demand)
 
         # Smooth penalty
-        deviation = abs(total_power - target)
+        deviation = total_power - target
         # print(deviation)
 
-        reward_signal = np.exp(-10*deviation)  # near 1 if very close, decays rapidly otherwise
+        c = 0.1
+
+        reward_signal = np.exp(-(deviation)**2/(2*c**2)) -1 # near 1 if very close, decays rapidly otherwise
         # print(reward_signal)
-        return reward_signal
+        return deviation
 
     def evaluate_cost_fairness(self):
         """
@@ -274,6 +294,7 @@ class P2PEnergyEnv(ParallelEnv):
         0 means fair cost (Hg <= total_cost).
         """
         penalties = {}
+        c = 0.1
         for seller in self.sellers:
             Hg = seller.get_generation_costs(seller.state)
             total_cost = 0.0
@@ -282,7 +303,7 @@ class P2PEnergyEnv(ParallelEnv):
                 total_cost += buyer.state * seller.state[buyer.buyer_id]
             # print(f"{seller.group_name} total_cost: {total_cost}, Hg: {Hg}" )
             if Hg <= total_cost:
-                penalty = np.exp(-10*(total_cost-Hg))
+                penalty = np.exp(-(total_cost-Hg)**2/(2*c**2))
             else:
                 penalty = 1
 
@@ -291,51 +312,6 @@ class P2PEnergyEnv(ParallelEnv):
         mean_penalties = sum(penalties.values())/len(penalties)
 
         return -mean_penalties
-
-
-
-   
-
-    def get_buyers_price(self, t):
-
-        buyers_prices = []
-        
-        for buyer in self.buyers:
-            buyers_prices.append(buyer.state)
-        
-        return np.array(buyers_prices)
-    
-    def get_sellers_power(self, t, buyer):
-
-        seller_power = []
-        
-        for seller in self.sellers:
-            seller_power.append(seller.state[buyer.buyer_id])
-        
-        return np.array(seller_power)
-    
-    def get_others_sellers_power(self, t, buyer):
-
-        other_seller_power = []
-        
-        for seller in self.sellers:
-            seller_power = list(seller.state)
-            del seller_power[buyer.buyer_id]
-            other_seller_power = np.concatenate((other_seller_power,np.array(seller_power)), axis=0)
-        
-        return other_seller_power
-
-    def get_others_power_price(self, agent, global_state):
-        others_power = []
-        others_price = []
-        for seller in self.sellers:
-            if seller.name != agent.name:
-                others_power = np.concatenate((others_power, seller.state), axis=0)
-        for buyer in self.buyers:
-            if buyer.name != agent.name:
-                others_price = np.append(others_price, buyer.state)
-
-        return others_power, others_price
     
     def render(self, mode="human"):
         """Render the environment state"""
@@ -381,25 +357,54 @@ class P2PEnergyEnv(ParallelEnv):
         
         # --- NEW: log rewards ---
         # compute rewards the same way as in step()
-        buyer_prices = self.get_buyers_price(t)
+        num_sellers = len(self.sellers)
+        num_buyers = len(self.buyers)
+
+        P = np.zeros([num_sellers, num_buyers])
+        C = np.zeros([num_buyers])
+
 
         for seller in self.sellers:
-            global_state = np.concatenate((global_state, seller.state), axis = 0)
+            P[seller.seller_id] = seller.state 
 
         for buyer in self.buyers:
-            global_state = np.append(global_state, buyer.state)
+            C[buyer.buyer_id] = buyer.state
+
+
+        comm_penalty = self.check_community_constraints(t)
+    
+        for seller in self.sellers:
+            penalty2 = 0
+            if not self.dones[seller.group_name]:
+                penalty1 = self.check_power_constrain_seller(t,P,seller) 
+                for buyer in self.buyers:
+                    penalty2 += self.check_power_constrain_buyer(t, P, buyer)
+                l1 = seller.lagrange[0]
+                l2 = seller.lagrange[1]
+                l3 = seller.lagrange[2]
+                state_info[f'{seller.name}_reward']= seller.get_wellness(t,P,C) - (l1*penalty1 + l2*penalty2 + l3*comm_penalty)
+                state_info[f'{seller.name}_l1']= l1
+                state_info[f'{seller.name}_l2']= l2
+                state_info[f'{seller.name}_l3']= l3
         
-        for seller in self.sellers:
-            others_power,others_price = self.get_others_power_price(seller, global_state)
-            reward = seller.get_wellness(t,seller.state,buyer_prices,others_power,others_price)
-            state_info[f'{seller.name}_reward'] = reward
-
         for buyer in self.buyers:
-            seller_power = self.get_sellers_power(t, buyer)
-            others_selers_power = self.get_others_sellers_power(t, buyer)
-            others_power,others_price = self.get_others_power_price(seller, global_state)
-            reward = buyer.get_wellness(t,seller_power,buyer.state,others_selers_power,others_price)
-            state_info[f'{buyer.name}_reward'] = reward
+            if not self.dones[buyer.group_name]:
+                penalty3 = self.check_cost_constrain(P,C)
+                l4 = buyer.lagrange[0]
+                state_info[f'{buyer.name}_reward'] =  buyer.get_wellness(t,P,C) - (l4*penalty3)
+                state_info[f'{buyer.name}_l1'] = l4
+        
+        # for seller in self.sellers:
+        #     others_power,others_price = self.get_others_power_price(seller, global_state)
+        #     reward = seller.get_wellness(t,seller.state,buyer_prices,others_power,others_price)
+        #     state_info[f'{seller.name}_reward'] = reward
+
+        # for buyer in self.buyers:
+        #     seller_power = self.get_sellers_power(t, buyer)
+        #     others_selers_power = self.get_others_sellers_power(t, buyer)
+        #     others_power,others_price = self.get_others_power_price(seller, global_state)
+        #     reward = buyer.get_wellness(t,seller_power,buyer.state,others_selers_power,others_price)
+        #     state_info[f'{buyer.name}_reward'] = reward
 
 
         # Write to CSV

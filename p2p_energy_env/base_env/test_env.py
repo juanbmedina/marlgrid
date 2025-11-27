@@ -28,12 +28,12 @@ def test_environment(num_steps=5):
     for i, seller in enumerate(env.sellers):
         seller.state = np.array([seller_state[i][0], seller_state[i][1]])
         print("seller net: ", seller.net[0])
-        actions_dict[seller.group_name] = [0.0, 0.0]
+        actions_dict[seller.group_name] = [0.0, 0.0, 0.0]
 
     for i, buyer in enumerate(env.buyers):
         buyer.state = buyer_state[i]
         print("buyer buy: ", buyer.net[0])
-        actions_dict[buyer.group_name] =  [0.0, 0.0]
+        actions_dict[buyer.group_name] =  [0.0, 0.0, 0.0]
 
     o, r, d , _ = env.step(actions_dict)
 
