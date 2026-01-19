@@ -1,0 +1,28 @@
+FROM rayproject/ray:2.50.0-gpu
+
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    git \
+    vim \
+    tmux \
+    htop \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# 👇 THIS IS THE IMPORTANT PART
+RUN pip install --upgrade pip && pip install \
+    torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/cu121 \
+    --extra-index-url https://pypi.org/simple \
+    gymnasium \
+    matplotlib \
+    pandas \
+    scipy \
+    tensorboard \
+    numpy
+
+USER ray
+WORKDIR /workspace
+CMD ["/bin/bash"]

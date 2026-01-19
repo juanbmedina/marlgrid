@@ -1,0 +1,22 @@
+{
+  "agent_0": {
+    "consumer_profile": [1.24, 3.34],  
+    "generator_profile": [2.8, 2.0],
+    "cost_params": [0.089, 52, 4.5]
+  },
+  "agent_1": {
+    "consumer_profile": [1.46, 0.68],
+    "generator_profile": [2.60, 1.58],
+    "cost_params": [0.110, 58, 1.2]
+  },
+  "agent_2": {
+    "consumer_profile": [2.17, 1.06],  
+    "generator_profile": [0.30, 0.48],
+    "cost_params": [0.0, 37, 10.2]
+  },
+    "agent_3": {
+    "consumer_profile": [0.03, 0.66],
+    "generator_profile": [0.0, 0.0],
+    "cost_params": [0.0, 0.0, 0.0]
+  }
+}
