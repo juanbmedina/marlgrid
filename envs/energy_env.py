@@ -21,6 +21,8 @@ class P2PEnergyEnv(MultiAgentEnv):
 
         ######## Agent creation ########
         json_path = 'profiles/agents_profiles.json'
+        if not os.path.exists(json_path):
+            raise FileNotFoundError(f"Required file not found: {json_path}")
         self.create_agents(json_path)
         self.sellers, self.buyers = self.split_agents(t=0)
 
@@ -53,15 +55,25 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.price_step = 1.0    # larger step for price
 
 
-        for agent in self.env_agents:
-            self.observation_spaces[agent.group_name] = gym.spaces.Box(low=-100,
+        for seller in self.sellers:
+            self.observation_spaces[seller.group_name] = gym.spaces.Box(low=-100,
                                                                         high=1000,
                                                                         shape=(num_sellers*num_buyers+num_buyers + 2, ), 
                                                                         dtype=np.float32)
             
-            self.action_spaces[agent.group_name] = gym.spaces.Box(low=-self.power_step,
+            self.action_spaces[seller.group_name] = gym.spaces.Box(low=-self.power_step,
                                                                     high=self.power_step,
                                                                     shape=(2,),
+                                                                    dtype=np.float32
+                                                                )
+        for buyer in self.buyers:
+            self.observation_spaces[buyer.group_name] = gym.spaces.Box(low=-100,
+                                                                        high=1000,
+                                                                        shape=(num_sellers*num_buyers+num_buyers + 2, ), 
+                                                                        dtype=np.float32)
+            
+            self.action_spaces[buyer.group_name] = gym.spaces.Box(low=-self.price_step,
+                                                                    high=self.price_step,
                                                                     dtype=np.float32
                                                                 )
 
@@ -78,18 +90,6 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.cost_ma_alpha = 0.05         # suavizado EMA para la violación
 
         self.lagrange = np.array([0.0, 0.0, 0.0, 0.0]) 
-
-        self.log_path = "exp_results/training_data.csv"
-
-        if not os.path.exists(self.log_path):
-            with open(self.log_path, "w", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    "episode",
-                    "mu",
-                    "penalty4"
-                ])
-
         self.episode_id = 0
 
 
@@ -166,7 +166,7 @@ class P2PEnergyEnv(MultiAgentEnv):
         for buyer in self.buyers:
             if not terminateds[buyer.group_name]:
                 delta = action_dict[buyer.group_name]
-                done, buyer.state = buyer.get_new_state(t, delta[0]*10)
+                done, buyer.state = buyer.get_new_state(t, delta)
             C[buyer.buyer_id] = buyer.state
 
         P_flat = P.flatten()  # This gives num_sellers * num_buyers values
@@ -253,13 +253,13 @@ class P2PEnergyEnv(MultiAgentEnv):
         ################### DONE EPISODE ###################
         if self.current_step >= self.max_steps:
             self.lagrange[3] += self.lambda_alpha*penalty4
-            with open(self.log_path, "a", newline="") as f:
-                writer = csv.writer(f)
-                writer.writerow([
-                    self.episode_id,
-                    mu1,
-                    penalty4
-                ])
+            # with open(self.log_path, "a", newline="") as f:
+            #     writer = csv.writer(f)
+            #     writer.writerow([
+            #         self.episode_id,
+            #         mu1,
+            #         penalty4
+            #     ])
             # print("mu: ", mu1, "Penalty: ", penalty4, "to wellness: ", -mu1*penalty4)
             for agent in self.env_agents:
                 terminateds[agent.group_name] = True
@@ -341,146 +341,6 @@ class P2PEnergyEnv(MultiAgentEnv):
         if mode == "human":
             self.print_state(t=0)
 
-    def print_state(self, t):
-        """Print current state of the energy market and log to CSV"""
-
-        # Initialize totals
-        total_generation = 0.0
-        total_demand = 0.0
-        total_price = 0.0
-
-        global_state = []
-
-        penalty1 = {}
-        penalty2 = {}
-        penalty3 = {}
-
-        wellness = {}
-
-        state_info = {
-            'episode': self.iter_count,
-            'step': self.current_step,
-        }
-
-        for agent in self.env_agents:
-            rol = agent.rol[t]
-
-            if rol == 'S':  # Seller
-                gen_power = np.sum(agent.state)
-                total_generation += gen_power
-                state_info[f'{agent.name}_power'] = gen_power
-                state_info[f'{agent.name}_capacity'] = agent.net[t]
-
-            elif rol == 'B':  # Buyer
-                price = agent.state
-                demand = agent.net[t]
-                total_price += price
-                total_demand += demand
-                state_info[f'{agent.name}_price'] = price
-                state_info[f'{agent.name}_demand'] = demand
-
-        # Add totals
-        state_info['total_generation'] = total_generation
-        state_info['total_demand'] = total_demand
-        state_info['total_price'] = total_price
-
-        
-        # --- NEW: log rewards ---
-        # compute rewards the same way as in step()
-        num_sellers = len(self.sellers)
-        num_buyers = len(self.buyers)
-
-        P = np.zeros([num_sellers, num_buyers])
-        C = np.zeros([num_buyers])
-
-
-        for seller in self.sellers:
-            P[seller.seller_id] = seller.state 
-
-        for buyer in self.buyers:
-            C[buyer.buyer_id] = buyer.state
-    
-        for seller in self.sellers:
-           
-            penalty1[seller.group_name] = self.check_power_constrain_seller(t,P,seller) 
-            penalty2[seller.group_name] = self.check_cost_constrain(P,C, seller)
-            wellness[seller.group_name] = seller.get_wellness(t,P,C) 
-
-            self.lagrange[0] += self.lambda_alpha * (penalty1[seller.group_name] - self.cost_threshold)
-            self.lagrange[1] += self.lambda_alpha * (penalty2[seller.group_name] - self.cost_threshold)
-
-        for buyer in self.buyers:
-
-            penalty3[buyer.group_name] = self.check_power_constrain_buyer(t, P, buyer) 
-            wellness[buyer.group_name] =  buyer.get_wellness(t,P,C)
-
-            self.lagrange[2] += self.lambda_alpha * (penalty3[buyer.group_name] - self.cost_threshold)
-
-        penalty4 = self.check_community_constraints(t)
-                
-
-        
-        self.lagrange[3] += self.lambda_alpha * (penalty4 - self.cost_threshold)   
-
-        self.lagrange[0] = np.clip(
-                self.lagrange[0],
-                self.lambda_clip_min,
-                self.lambda_clip_max
-            )
-            
-        self.lagrange[1] = np.clip(
-                self.lagrange[1],
-                self.lambda_clip_min,
-                self.lambda_clip_max
-            )
-        
-        self.lagrange[2] = np.clip(
-                self.lagrange[1],
-                self.lambda_clip_min,
-                self.lambda_clip_max
-            )     
-        self.lagrange[3] = np.clip(
-                self.lagrange[3],
-               -self.lambda_clip_max,
-                self.lambda_clip_max
-            )
-
-
-        l1 = self.lagrange[0]
-        l2 = self.lagrange[1]
-        l3 = self.lagrange[2]
-        mu1 = self.lagrange[3]
-
-        for agent in self.env_agents:
-            # wellness[agent.group_name] += - (l1*penalty1 + l2*penalty2+ l3*comm_penalty + l4*penalty3)
-            state_info[f'{agent.group_name}_reward'] =  wellness[agent.group_name]
-
-        state_info[f'l1']= l1
-        state_info[f'l2']= l2
-        state_info[f'l3']= l3
-        state_info[f'l4']= mu1
-    
-        # for seller in self.sellers:
-        #     others_power,others_price = self.get_others_power_price(seller, global_state)
-        #     reward = seller.get_wellness(t,seller.state,buyer_prices,others_power,others_price)
-        #     state_info[f'{seller.name}_reward'] = reward
-
-        # for buyer in self.buyers:
-        #     seller_power = self.get_sellers_power(t, buyer)
-        #     others_selers_power = self.get_others_sellers_power(t, buyer)
-        #     others_power,others_price = self.get_others_power_price(seller, global_state)
-        #     reward = buyer.get_wellness(t,seller_power,buyer.state,others_selers_power,others_price)
-        #     state_info[f'{buyer.name}_reward'] = reward
-
-
-        # Write to CSV
-        with open("market_log.csv", "a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=state_info.keys())
-            if f.tell() == 0:  # write header only once
-                writer.writeheader()
-
-            if self.current_step%1 == 0:
-                writer.writerow(state_info)
 
     def split_agents(self, t=0):
         """
