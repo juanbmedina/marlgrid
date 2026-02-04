@@ -47,11 +47,13 @@ my_multi_agent_progress_reporter = tune.CLIReporter(
 config = (
     PPOConfig()
     .environment("energy_market_ma")
+
     .multi_agent(
         policies={"seller_policy", "buyer_policy"},
         policy_mapping_fn=energy_policy_mapping_fn,
         policies_to_train=["seller_policy", "buyer_policy"],
     )
+
     .rl_module(
         rl_module_spec=MultiRLModuleSpec(
             rl_module_specs={
@@ -60,27 +62,36 @@ config = (
             }
         )
     )
+
+    # === CPU-friendly learner setup ===
     .learners(
-        num_learners = 2,
-        num_gpus_per_learner=1,
+        num_learners=1,              # IMPORTANT
+        num_gpus_per_learner=0,
     )
+
     .training(
         gamma=0.99,
         lr=3e-4,
-        train_batch_size_per_learner=4096, 
-        minibatch_size=512,
-        num_epochs=10,
-        
-        # Additional optimizations
+
+        # Smaller batches to fit RAM
+        train_batch_size_per_learner=1024,
+        minibatch_size=256,
+        num_epochs=4,
+
         vf_loss_coeff=0.5,
         entropy_coeff=0.01,
     )
+
+    # === Environment rollout ===
     .env_runners(
-        # Parallel environment rollouts on CPU
-        num_env_runners=64,
+        num_env_runners=2,           # 2–3 is ideal for Ryzen 2600
         num_cpus_per_env_runner=1,
     )
+
+    # === Reduce overhead ===
+    .debugging(log_level="WARN")
 )
+
 
 # Use absolute path
 storage_path = os.path.abspath("./exp_results")

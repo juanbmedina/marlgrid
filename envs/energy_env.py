@@ -58,7 +58,7 @@ class P2PEnergyEnv(MultiAgentEnv):
         for seller in self.sellers:
             self.observation_spaces[seller.group_name] = gym.spaces.Box(low=-100,
                                                                         high=1000,
-                                                                        shape=(num_sellers*num_buyers+num_buyers + 2, ), 
+                                                                        shape=(num_sellers*num_buyers+num_buyers, ), 
                                                                         dtype=np.float32)
             
             self.action_spaces[seller.group_name] = gym.spaces.Box(low=-self.power_step,
@@ -69,7 +69,7 @@ class P2PEnergyEnv(MultiAgentEnv):
         for buyer in self.buyers:
             self.observation_spaces[buyer.group_name] = gym.spaces.Box(low=-100,
                                                                         high=1000,
-                                                                        shape=(num_sellers*num_buyers+num_buyers + 2, ), 
+                                                                        shape=(num_sellers*num_buyers+num_buyers, ), 
                                                                         dtype=np.float32)
             
             self.action_spaces[buyer.group_name] = gym.spaces.Box(low=-self.price_step,
@@ -92,55 +92,42 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.lagrange = np.array([0.0, 0.0, 0.0, 0.0]) 
         self.episode_id = 0
 
-
-        # Save printed states
-        self.csv_initialized = False
-        self.csv_file = f"market_log_all_episodes_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}.csv"
-
     def reset(self, *, seed=None, options=None):
         self.episode_id += 1
         infos = {}
         self.sellers, self.buyers = self.split_agents(t=0)
         self.current_step = 0
-        global_state = []
         obs = {}
-        self.previous_wellness = {}
         self.iter_count += 1
 
+        num_sellers = len(self.sellers)
+        num_buyers = len(self.buyers)
+
+        self.P = np.zeros([num_sellers, num_buyers])
+        self.C = np.zeros([num_buyers])
 
         for seller in self.sellers:
             s1 = 0.475
             s2 = 0.475
             seller.state = np.array([s1, s2]) 
-            seller.cost_ma = 0.0                    # NEW
-            global_state = np.concatenate((global_state, seller.state), axis = 0)
+            self.P[seller.seller_id] = seller.state 
 
         for buyer in self.buyers:
-            buyer.state =  50
-            buyer.cost_ma = 0.0  
-            global_state = np.append(global_state, buyer.state)
-        
-        global_state = np.concatenate((global_state, np.array([0, 0])), axis=0)
+            buyer.state =  70
+            self.C[buyer.buyer_id] = buyer.state
 
         for seller in self.sellers:
-            obs[seller.group_name] = np.array(global_state, dtype=np.float32).flatten()
+            obs[seller.group_name] = np.concatenate([self.P.flatten(),self.C])
         for buyer in self.buyers:
-            obs[buyer.group_name] = np.array(global_state, dtype=np.float32).flatten()
-
-        for agent in self.env_agents:
-            infos[agent.group_name] =   {}
+            obs[buyer.group_name] = np.concatenate([self.P.flatten(),self.C])
 
         return obs, infos
 
     def step(self, action_dict):
         """Execute one step in the environment"""
         t = 0
-        global_state = []
         obs = {}
         infos = {}
-        penalty1 = {}
-        penalty2 = {}
-        penalty3 = {}
         wellness = {}
         terminateds = {}
         truncateds = {}
@@ -150,123 +137,30 @@ class P2PEnergyEnv(MultiAgentEnv):
 
         self.sellers, self.buyers = self.split_agents(t)
 
-        num_sellers = len(self.sellers)
-        num_buyers = len(self.buyers)
-
-        P = np.zeros([num_sellers, num_buyers])
-        C = np.zeros([num_buyers])
-
         ################### TAKE ACTIONS ###################
         for seller in self.sellers:
             if not terminateds[seller.group_name]:
                 delta = action_dict[seller.group_name]
                 done, seller.state = seller.get_new_state(t, delta)
-            P[seller.seller_id] = seller.state 
+            self.P[seller.seller_id] = seller.state 
+            obs[seller.group_name] = np.concatenate([self.P.flatten(),self.C])
+            wellness[seller.group_name] = seller.get_wellness(t,self.P,self.C) 
 
         for buyer in self.buyers:
             if not terminateds[buyer.group_name]:
                 delta = action_dict[buyer.group_name]
                 done, buyer.state = buyer.get_new_state(t, delta)
-            C[buyer.buyer_id] = buyer.state
-
-        P_flat = P.flatten()  # This gives num_sellers * num_buyers values
-        global_state = np.concatenate([P_flat, C])
-        
-        penalty4 = self.check_community_constraints(t)
-
-        global_state = np.concatenate((global_state, np.array([self.lagrange[3], penalty4])), axis=0)
-        
-
-        ################### REWARD AND OBSERVATIONS ###################
-        for seller in self.sellers:
-            if not terminateds[seller.group_name]:
-                obs[seller.group_name] = np.array(global_state, dtype=np.float64).flatten()
-
-                penalty1[seller.group_name] = self.check_power_constrain_seller(t,P,seller)  
-                penalty2[seller.group_name] = self.check_cost_constrain(P,C, seller)   
-                    
-                wellness[seller.group_name] = seller.get_wellness(t,P,C)
-
-                self.lagrange[0] += self.lambda_alpha * (penalty1[seller.group_name])
-                self.lagrange[1] += self.lambda_alpha * (penalty2[seller.group_name])
-                
-        
-        for buyer in self.buyers:
-            if not terminateds[buyer.group_name]:
-                obs[buyer.group_name] = np.array(global_state, dtype=np.float64).flatten()
-
-                penalty3[buyer.group_name] = self.check_power_constrain_buyer(t, P, buyer)
-
-                wellness[buyer.group_name] = buyer.get_wellness(t,P,C) 
-
-                self.lagrange[2] += self.lambda_alpha * (penalty3[buyer.group_name])
-
-        for seller in self.sellers:
-            l1 = self.lagrange[0]
-            l2 = self.lagrange[1]
-            mu1 = self.lagrange[3]
-            infos[seller.group_name] = {
-                "mu1": mu1,
-                "penalty4": penalty4
-            }
-            # wellness[seller.group_name] += - (l1*penalty1[seller.group_name]  + l2*penalty2[seller.group_name]) + mu1*penalty4
-            wellness[seller.group_name] +=  -mu1*penalty4
-
-        for buyer in self.buyers:
-            l3 = self.lagrange[2]
-            # mu1 = self.lagrange[3]
-            # wellness[buyer.group_name] += - (l3*penalty3[buyer.group_name])  + mu1*penalty4
-            # wellness[buyer.group_name] += mu1*penalty4
-
-
-        self.lagrange[0] = np.clip(
-                self.lagrange[0],
-                self.lambda_clip_min,
-                self.lambda_clip_max
-            )
-            
-        self.lagrange[1] = np.clip(
-                self.lagrange[1],
-                self.lambda_clip_min,
-                self.lambda_clip_max
-            )
-        
-        self.lagrange[2] = np.clip(
-                self.lagrange[2],
-                self.lambda_clip_min,
-                self.lambda_clip_max
-            )
-        
-        self.lagrange[3] = np.clip(
-                self.lagrange[3],
-               -self.lambda_clip_max,
-                self.lambda_clip_max
-            )
-
-
-
-        ################### ACTIVE AGENTS ###################
-        for agent in self.env_agents:
-            terminateds[agent.group_name] = False
-            truncateds[agent.group_name] = False
+            self.C[buyer.buyer_id] = buyer.state
+            obs[buyer.group_name] = np.concatenate([self.P.flatten(),self.C])
+            wellness[buyer.group_name] = buyer.get_wellness(t,self.P,self.C)
 
         ################### DONE EPISODE ###################
         if self.current_step >= self.max_steps:
-            self.lagrange[3] += self.lambda_alpha*penalty4
-            # with open(self.log_path, "a", newline="") as f:
-            #     writer = csv.writer(f)
-            #     writer.writerow([
-            #         self.episode_id,
-            #         mu1,
-            #         penalty4
-            #     ])
-            # print("mu: ", mu1, "Penalty: ", penalty4, "to wellness: ", -mu1*penalty4)
             for agent in self.env_agents:
                 terminateds[agent.group_name] = True
         # Global done
         terminateds["__all__"] = all(terminateds[a.group_name] for a in self.env_agents)
         truncateds["__all__"] = False
-
 
         self.current_step += 1
 
@@ -335,11 +229,6 @@ class P2PEnergyEnv(MultiAgentEnv):
         mean_penalties = sum(penalties.values())/len(penalties)
 
         return -mean_penalties
-    
-    def render(self, mode="human"):
-        """Render the environment state"""
-        if mode == "human":
-            self.print_state(t=0)
 
 
     def split_agents(self, t=0):

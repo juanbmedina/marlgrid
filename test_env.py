@@ -12,27 +12,25 @@ def test_environment(num_steps=5):
     print("\n=== RETURN RESET ===")
     print("--- obs ---")
     print(obs)
-    print("--- infos ---")
-    print(infos)
 
-    # seller_state = [[0.5, 0.5], [0.5, 0.5], [0.53, 0.24], [0.35, 0.20]]
-    # buyer_state = [60.22, 50.04]
+    seller_state = [[0.5, 0.5], [0.5, 0.5], [0.53, 0.24], [0.35, 0.20]]
+    buyer_state = [60.22, 50.04]
 
-    # for i, seller in enumerate(env.sellers):
-    #     seller.state = np.array([0.4875*2, 0.4875*2])
-    #     print("seller net: ", seller.net[0])
-    #     actions_dict[seller.group_name] = [0.0, 0.0]
+    for i, seller in enumerate(env.sellers):
+        # seller.state = np.array([0.4875*2, 0.4875*2])
+        # print("seller net: ", seller.net[0])
+        actions_dict[seller.group_name] = [0.1, 0.2]
 
-    # for i, buyer in enumerate(env.buyers):
-    #     buyer.state = 50
-    #     print("buyer buy: ", buyer.net[0])
-    #     actions_dict[buyer.group_name] =  [0.0, 0.0]
+    for i, buyer in enumerate(env.buyers):
+        # buyer.state = 50
+        # print("buyer buy: ", buyer.net[0])
+        actions_dict[buyer.group_name] =  2.0
 
-    # o, r, d , _ = env.step(actions_dict)
+    o, r, d , _, _ = env.step(actions_dict)
 
-    # print("=== FINAL OBSERVATION ===")
-    # print(f"Global Obs: {o}")
-    # print(f"Reward: {r}")
+    print("=== FINAL OBSERVATION ===")
+    print(f"Global Obs: {o}")
+    print(f"Reward: {r}")
 
     # env.evaluate_constraints(0)
 

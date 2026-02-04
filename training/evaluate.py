@@ -121,15 +121,27 @@ def evaluate_and_save_states(checkpoint_path, num_episodes=5, output_file=None):
                 # Forward pass (inference mode, no exploration)
                 with torch.no_grad():
                     rl_module_out = rl_module.forward_inference(input_dict)
+
+                dist_cls = rl_module.get_inference_action_dist_cls()
+
+                action_dist = dist_cls.from_logits(rl_module_out[Columns.ACTION_DIST_INPUTS])
+
+                action_det = action_dist._dist.mean
+
+                action_np = convert_to_numpy(action_det)[0]
+
+                space = env.action_spaces[agent_id]
                 
+                action_np = np.clip(action_np, space.low, space.high)
                 # Extract action from output
                 # For continuous action spaces (Box), we get mean and log_std
                 # We only want the mean (deterministic action)
-                action_dist_inputs = rl_module_out[Columns.ACTION_DIST_INPUTS]
+                # action_dist_inputs = rl_module_out[Columns.ACTION_DIST_INPUTS]
                 
                 # Convert to numpy
-                action_np = convert_to_numpy(action_dist_inputs).squeeze(0)
-                
+                # action_np = convert_to_numpy(action_dist_inputs).squeeze(0)
+                # action_np = convert_to_numpy(rl_module_out[Columns.ACTIONS])[0]
+                # print(action_np)
                 # For Box spaces with Gaussian distribution, the output is [mean, log_std]
                 # We only need the mean (first half)
                 if policy_id == "seller_policy":
@@ -142,7 +154,6 @@ def evaluate_and_save_states(checkpoint_path, num_episodes=5, output_file=None):
                     action = action_np[:1]  # Take only the mean
                 else:
                     action = action_np
-                
                 actions[agent_id] = action
             
             # Step environment
