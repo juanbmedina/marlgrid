@@ -4,32 +4,52 @@ import matplotlib.pyplot as plt
 from envs.energy_agent import EnergyAgent
 
 def test_environment(num_steps=5):
+
+    ENV_CONFIG = dict(
+        max_steps=100,
+        power_step=0.1,
+        price_step=1.0,
+        pi_min=60.0,
+        pi_max=200.0,
+        lambda_buy=100.0,
+        lambda_sell=50.0,
+        lambda_u=90.0,
+        theta_u=1.0,
+        reward_mode="payoff",   # or "welfare"
+        training_mode="group",
+    )
     # Initialize environment
-    env = P2PEnergyEnv()
+    env = P2PEnergyEnv(ENV_CONFIG)
     obs, infos = env.reset()
     actions_dict = {}
 
-    print("\n=== RETURN RESET ===")
-    print("--- obs ---")
-    print(obs)
+    # print("\n=== RETURN RESET ===")
+    # print("--- obs ---")
+    # print(obs)
 
-    seller_state = [[0.5, 0.5], [0.5, 0.5], [0.53, 0.24], [0.35, 0.20]]
-    buyer_state = [60.22, 50.04]
+    seller_state = [[2, 60], [0.35, 60], [1.354, 60], [1.89, 60]]
+    buyer_state = [[2.1, 100], [0.59, 100]]
 
-    for i, seller in enumerate(env.sellers):
-        # seller.state = np.array([0.4875*2, 0.4875*2])
+    for j, sid in enumerate(env.seller_ids):
+        # env.P[j, :] = seller_state[j]
         # print("seller net: ", seller.net[0])
-        actions_dict[seller.group_name] = [0.1, 0.2]
 
-    for i, buyer in enumerate(env.buyers):
-        # buyer.state = 50
+        env.offer_q[j] = seller_state[j][0]
+        env.ask_p[j] = seller_state[j][1]
+        actions_dict[sid] = [0.0, 0.0]
+
+    for i, bid in enumerate(env.buyer_ids):
+        # env.pi[i] = buyer_state[i]
         # print("buyer buy: ", buyer.net[0])
-        actions_dict[buyer.group_name] =  2.0
+
+        env.bid_q[i] = buyer_state[i][0]
+        env.bid_p[i] = buyer_state[i][1]
+        actions_dict[bid] =   [0.0, 0.0]
 
     o, r, d , _, _ = env.step(actions_dict)
 
-    print("=== FINAL OBSERVATION ===")
-    print(f"Global Obs: {o}")
+    # print("=== FINAL OBSERVATION ===")
+    # print(f"Global Obs: {o}")
     print(f"Reward: {r}")
 
     # env.evaluate_constraints(0)

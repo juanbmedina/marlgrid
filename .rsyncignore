@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+rllib_venv/
+.venv/
+env/
+.env/
+
+# Ray / RLlib
+ray_results/
+**/ray_results/
+
+# Logs and results
+exp_results/
+*.log
+
+# OS / editor junk
+.DS_Store
+.idea/
+.vscode/
