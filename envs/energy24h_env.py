@@ -2,12 +2,31 @@
 import os
 import json
 import csv
+import random
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import gymnasium as gym
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
+
+from envs.community_welfare_rewards import (
+    r_utilitarian_welfare,
+    r_rawlsian_maximin,
+    r_gini_fairness,
+    r_jain_fairness,
+    r_proportional_fairness,
+    r_grid_independence,
+    r_demand_satisfaction,
+    r_price_stability,
+    r_envy_penalty,
+    build_composite_reward,
+    m_gini,
+    m_jain_index,
+    m_grid_independence,
+    m_price_volatility,
+    m_envy,
+)
 
 
 @dataclass
@@ -70,7 +89,25 @@ class P2PEnergyEnv(MultiAgentEnv):
             raise ValueError("reward_mode must be 'payoff' or 'welfare'")
 
         self.beta = float(config.get("beta", 0.0))
+        self.alpha = float(config.get("alpha", 0.0))
         self.training_mode = str(config.get("training_mode", "individual")).lower()
+
+        # Welfare reward configuration
+        self.welfare_mode = str(config.get("welfare_mode", "none")).lower()
+        # Options: "none", "utilitarian", "rawlsian", "gini", "jain",
+        #          "proportional", "grid_independence", "demand_satisfaction",
+        #          "price_stability", "envy", "composite"
+
+        self.alpha_individual = float(config.get("alpha_individual", 0.6))
+        # 1.0 = pure selfish,  0.0 = pure social
+        
+        # For composite mode: per-metric weights
+        self.welfare_weights = config.get("welfare_weights", {
+            "utilitarian":        0.25,
+            "gini":               0.25,
+            "grid_independence":  0.25,
+            "demand_satisfaction": 0.25,
+        })
 
         # ---------------- pairwise settlement ----------------
         self.pair_pricing_rule = str(config.get("pair_pricing_rule", "ask")).lower()
@@ -91,6 +128,12 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.agents_all: List[AgentProfile] = self._load_agents(json_path)
         self.n_agents = len(self.agents_all)
         self.num_hours = self._validate_profile_horizon(self.agents_all)
+
+        # ---------------- forecast noise ----------------
+        self.profile_noise_std = float(config.get("profile_noise_std", 0.0))
+        self.profile_noise_type = str(config.get("profile_noise_type", "gaussian")).lower()
+        if self.profile_noise_type not in ("gaussian", "uniform"):
+            raise ValueError("profile_noise_type must be 'gaussian' or 'uniform'")
 
         inferred_sph = max(1, self.max_steps // max(1, self.num_hours))
         self.steps_per_hour = int(config.get("steps_per_hour", inferred_sph))
@@ -140,7 +183,7 @@ class P2PEnergyEnv(MultiAgentEnv):
 
         self.grid_import = np.zeros((self.n_agents,), dtype=np.float32)
         self.grid_export = np.zeros((self.n_agents,), dtype=np.float32)
-        self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
+        # self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
 
         # ---------------- observation spaces ----------------
         # Global:
@@ -161,6 +204,9 @@ class P2PEnergyEnv(MultiAgentEnv):
         # evaluation compatibility
         self.state: Dict[str, object] = {}
 
+        # initialize noisy profiles (no noise on first call, seed not set yet)
+        self._sample_noisy_profiles()
+
         # initialize hour 0
         self._set_hour(0, reset_quotes=True)
 
@@ -175,7 +221,8 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.step_count = 0
         self.episode_id += 1
 
-        self._set_hour(0, reset_quotes=True)
+        self._sample_noisy_profiles()
+        self._set_hour(0, reset_quotes=False)
         self._update_state()
 
         obs = self._build_obs()
@@ -243,21 +290,53 @@ class P2PEnergyEnv(MultiAgentEnv):
         # --------------------------------------------------
         norm_payoffs, payoffs = self._compute_payoffs_and_metrics()
 
-        vals = np.array(list(norm_payoffs.values()), dtype=np.float64)
-        share = float(np.mean(vals)) if vals.size else 0.0
-
-        rewards = {
-            aid: float((1.0 - self.beta) * norm_payoffs[aid] + self.beta * share)
-            for aid in self.possible_agents
-        }
-
-
-        # --------------------------------------------------
-        # 4) Diagnostics
-        # --------------------------------------------------
-        total_p2p = float(np.sum(self.P))
+        total_p2p    = float(np.sum(self.P))
         total_import = float(np.sum(self.grid_import))
         total_export = float(np.sum(self.grid_export))
+        price_range  = self.pi_gs - self.pi_gb
+        
+        if self.welfare_mode == "none":
+            # Original behaviour: payoff + optional beta-sharing
+            rewards = {
+                aid: float(payoffs[aid])
+                for aid in self.possible_agents
+            }
+        
+        else:
+            # Single social metric mode
+            METRIC_FNS = {
+                "utilitarian":        lambda: r_utilitarian_welfare(norm_payoffs),
+                "rawlsian":           lambda: r_rawlsian_maximin(norm_payoffs),
+                "gini":               lambda: r_gini_fairness(norm_payoffs),
+                "jain":               lambda: r_jain_fairness(norm_payoffs),
+                "proportional":       lambda: r_proportional_fairness(norm_payoffs),
+                "grid_independence":  lambda: r_grid_independence(
+                    total_p2p, total_import, total_export, self.possible_agents
+                ),
+                "demand_satisfaction": lambda: r_demand_satisfaction(
+                    self.P, self.grid_import, self.cap, self.role, self.possible_agents
+                ),
+                "price_stability":    lambda: r_price_stability(
+                    self.M, self.P, price_range, self.possible_agents
+                ),
+                "envy":               lambda: r_envy_penalty(norm_payoffs),
+            }
+            social_r = METRIC_FNS[self.welfare_mode]()
+            rewards = {
+                aid: float(norm_payoffs[aid] + social_r[aid])
+                for aid in self.possible_agents
+            }
+        
+        # ── Logging social metrics in info dict (always, for analysis) ──
+        welfare_metrics = {
+            "gini":               m_gini(np.array(list(norm_payoffs.values()))),
+            "jain":               m_jain_index(np.array(list(norm_payoffs.values()))),
+            "grid_independence":  m_grid_independence(total_p2p, total_import, total_export),
+            "price_volatility":   m_price_volatility(self.M, self.P),
+            "mean_envy":          m_envy(norm_payoffs),
+            "utilitarian_welfare": float(np.mean(list(norm_payoffs.values()))),
+            "rawlsian_welfare":   float(np.min(list(norm_payoffs.values()))),
+        }
 
         # --------------------------------------------------
         # 5) Advance env time
@@ -286,7 +365,7 @@ class P2PEnergyEnv(MultiAgentEnv):
 
         infos = {
             aid: {
-                "mu": float(self.mu),
+                # "mu": float(self.mu),
                 "hour_index": int(transition_hour),
                 "next_hour_index": int(self.current_hour),
                 "role": self._role_str_idx(self.agent_name_to_idx[aid]),
@@ -309,7 +388,7 @@ class P2PEnergyEnv(MultiAgentEnv):
                 {
                     "episode": int(self.episode_id),
                     "hour_index": int(transition_hour),
-                    "mu": float(self.mu),
+                    # "mu": float(self.mu),
                     "total_p2p": float(total_p2p),
                     "total_import": float(total_import),
                     "total_export": float(total_export),
@@ -406,22 +485,6 @@ class P2PEnergyEnv(MultiAgentEnv):
         s_idx = self.current_seller_idx
         b_idx = self.current_buyer_idx
 
-        if len(s_idx) == 0 and len(b_idx) == 0:
-            self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
-            return
-
-        if len(s_idx) == 0:
-            for i in b_idx:
-                self.grid_import[i] = float(self.cap[i])
-            self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
-            return
-
-        if len(b_idx) == 0:
-            for j in s_idx:
-                if self.p[j] <= self.lambda_sell + self.eps:
-                    self.grid_export[j] = float(self.q[j])
-            self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
-            return
 
         offer_q = self.q[s_idx].astype(np.float32).copy()
         ask_p = self.p[s_idx].astype(np.float32).copy()
@@ -431,8 +494,13 @@ class P2PEnergyEnv(MultiAgentEnv):
         rem_s = offer_q.copy()
         rem_b = bid_q.copy()
 
-        s_order_local = list(np.argsort(ask_p))
-        b_order_local = list(np.argsort(-bid_p))
+        s_locals = list(range(len(ask_p)))
+        random.shuffle(s_locals)
+        s_order_local = sorted(s_locals, key=lambda i: ask_p[i])
+
+        b_locals = list(range(len(bid_p)))
+        random.shuffle(b_locals)
+        b_order_local = sorted(b_locals, key=lambda i: -bid_p[i])
 
         for bi_local in b_order_local:
             if rem_b[bi_local] <= self.eps:
@@ -471,16 +539,6 @@ class P2PEnergyEnv(MultiAgentEnv):
             if leftover > self.eps:
                 self.grid_export[global_j] = leftover
 
-        active = self.P > self.eps
-        if np.any(active):
-            qtys = self.P[active].astype(np.float64)
-            prices = self.M[active].astype(np.float64)
-            self.mu = float(np.sum(qtys * prices) / max(np.sum(qtys), self.eps))
-        else:
-            self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
-
-        self.mu = float(np.clip(self.mu, self.pi_gb, self.pi_gs))
-
     def _compute_payoffs_and_metrics(self) -> Tuple[Dict[str, float], Dict[str, float]]:
         payoffs = {aid: 0.0 for aid in self.possible_agents}
         norm_payoffs = {aid: 0.0 for aid in self.possible_agents}
@@ -500,7 +558,7 @@ class P2PEnergyEnv(MultiAgentEnv):
                 revenue = p2p_revenue + export_revenue
                 payoff = float(revenue - cost)
 
-                min_payoff = -prof.c
+                min_payoff = self.lambda_sell * self.cap[idx] - float(prof.a * (self.cap[idx] ** 2) + prof.b * self.cap[idx] + prof.c)
                 max_payoff = self.cap[idx] * self.pi_gs - float(prof.a * (self.cap[idx] ** 2) + prof.b * self.cap[idx] + prof.c)
                 norm_payoff = (payoff - min_payoff) / (max_payoff - min_payoff)
 
@@ -537,7 +595,7 @@ class P2PEnergyEnv(MultiAgentEnv):
     # =====================================================================
 
     def _resolve_json_path(self, json_path: Optional[str]) -> str:
-        candidates = []
+        candidates = [] 
         if json_path:
             candidates.append(str(json_path))
 
@@ -611,8 +669,8 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.current_buyer_idx = []
 
         for idx, ag in enumerate(self.agents_all):
-            ag.D = float(ag.consumer_profile[self.current_hour])
-            ag.G = float(ag.generator_profile[self.current_hour])
+            ag.D = float(self._noisy_D[idx, self.current_hour])
+            ag.G = float(self._noisy_G[idx, self.current_hour])
 
             net = ag.G - ag.D
 
@@ -651,11 +709,37 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.M.fill(0.0)
         self.grid_import.fill(0.0)
         self.grid_export.fill(0.0)
-        self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
+        # self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
 
     # =====================================================================
     # Aux
     # =====================================================================
+
+    def _sample_noisy_profiles(self) -> None:
+        """Build per-episode noisy D/G arrays from the original profiles.
+
+        If profile_noise_std == 0 the originals are used unchanged.
+        Noise is multiplicative and relative: noisy = original * (1 + std * noise),
+        then clipped to zero so values stay non-negative.
+        """
+        orig_D = np.array([ag.consumer_profile for ag in self.agents_all], dtype=np.float32)
+        orig_G = np.array([ag.generator_profile for ag in self.agents_all], dtype=np.float32)
+
+        if self.profile_noise_std <= 0.0:
+            self._noisy_D = orig_D
+            self._noisy_G = orig_G
+            return
+
+        shape = (self.n_agents, self.num_hours)
+        if self.profile_noise_type == "gaussian":
+            noise_D = np.random.randn(*shape).astype(np.float32)
+            noise_G = np.random.randn(*shape).astype(np.float32)
+        else:  # uniform
+            noise_D = np.random.uniform(-1.0, 1.0, size=shape).astype(np.float32)
+            noise_G = np.random.uniform(-1.0, 1.0, size=shape).astype(np.float32)
+
+        self._noisy_D = np.clip(orig_D * (1.0 + self.profile_noise_std * noise_D), 0.0, None)
+        self._noisy_G = np.clip(orig_G * (1.0 + self.profile_noise_std * noise_G), 0.0, None)
 
     def _role_str_idx(self, idx: int) -> str:
         if self.role[idx] == 1:
@@ -715,5 +799,5 @@ class P2PEnergyEnv(MultiAgentEnv):
             f"step={self.step_count} hour={self.current_hour} "
             f"sellers={int(np.sum(self.role == 1))} "
             f"buyers={int(np.sum(self.role == -1))} "
-            f"mu={self.mu:.3f} total_p2p={float(np.sum(self.P)):.3f}"
+            # f"mu={self.mu:.3f} total_p2p={float(np.sum(self.P)):.3f}"
         )

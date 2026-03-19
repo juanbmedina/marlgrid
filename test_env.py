@@ -1,22 +1,28 @@
 import numpy as np
 from envs.energy_env import P2PEnergyEnv
 import matplotlib.pyplot as plt
-from envs.energy_agent import EnergyAgent
 
 def test_environment(num_steps=5):
 
     ENV_CONFIG = dict(
-        max_steps=100,
-        power_step=0.1,
-        price_step=1.0,
+        enable_csv_log=False,
+        max_steps=96,           # 24 horas * 4 pasos por hora
+        steps_per_hour=4,
+        hour_mode="hold_last",
+        action_mode="absolute", # ya no delta
         pi_min=60.0,
-        pi_max=200.0,
-        lambda_buy=100.0,
-        lambda_sell=50.0,
-        lambda_u=90.0,
+        pi_max=100.0,
+        lambda_sell=50,
+        lambda_buy=110,
+        lambda_u=110.0,         # 7.8 aquí sigue viéndose muy mal escalado para precios 60-110
         theta_u=1.0,
-        reward_mode="payoff",   # or "welfare"
-        training_mode="group",
+        reward_mode="payoff",
+        training_mode="individual",   # o "group" con shared_policy
+        alpha=0.1,
+        beta=0.1,
+        pair_pricing_rule="midpoint",
+        agents_json_path="profiles/agents_profiles_24h.json",
+        welfare_mode="gini"
     )
     # Initialize environment
     env = P2PEnergyEnv(ENV_CONFIG)
@@ -30,21 +36,22 @@ def test_environment(num_steps=5):
     seller_state = [[2, 60], [0.35, 60], [1.354, 60], [1.89, 60]]
     buyer_state = [[2.1, 100], [0.59, 100]]
 
-    for j, sid in enumerate(env.seller_ids):
-        # env.P[j, :] = seller_state[j]
-        # print("seller net: ", seller.net[0])
 
-        env.offer_q[j] = seller_state[j][0]
-        env.ask_p[j] = seller_state[j][1]
-        actions_dict[sid] = [0.0, 0.0]
+    # for j, sid in enumerate(env.seller_ids):
+    #     # env.P[j, :] = seller_state[j]
+    #     # print("seller net: ", seller.net[0])
 
-    for i, bid in enumerate(env.buyer_ids):
-        # env.pi[i] = buyer_state[i]
-        # print("buyer buy: ", buyer.net[0])
+    #     env.offer_q[j] = seller_state[j][0]
+    #     env.ask_p[j] = seller_state[j][1]
+    #     actions_dict[sid] = [0.0, 0.0]
 
-        env.bid_q[i] = buyer_state[i][0]
-        env.bid_p[i] = buyer_state[i][1]
-        actions_dict[bid] =   [0.0, 0.0]
+    # for i, bid in enumerate(env.buyer_ids):
+    #     # env.pi[i] = buyer_state[i]
+    #     # print("buyer buy: ", buyer.net[0])
+
+    #     env.bid_q[i] = buyer_state[i][0]
+    #     env.bid_p[i] = buyer_state[i][1]
+    #     actions_dict[bid] =   [0.0, 0.0]
 
     o, r, d , _, _ = env.step(actions_dict)
 

@@ -91,9 +91,11 @@ ENV_CONFIG = dict(
     theta_u=1.0,
     reward_mode="payoff",
     training_mode="individual",   # o "group" con shared_policy
-    beta=0.0,
+    alpha=0.1,
+    beta=0.1,
     pair_pricing_rule="midpoint",
     agents_json_path="profiles/agents_profiles_24h.json",
+    welfare_mode="none"
 )
 
 energy_policy_mapping_fn = policy_mode(ENV_CONFIG)
@@ -163,7 +165,7 @@ results = tune.Tuner(
     "PPO",
     param_space=config,
     run_config=tune.RunConfig(
-        stop={"num_env_steps_sampled_lifetime": 150000},
+        stop={"num_env_steps_sampled_lifetime": 200000},
         storage_path=storage_path,
         name="energy_market_training",
         verbose = 1,
