@@ -165,15 +165,15 @@ results = tune.Tuner(
     "PPO",
     param_space=config,
     run_config=tune.RunConfig(
-        stop={"num_env_steps_sampled_lifetime": 200000},
+        stop={"num_env_steps_sampled_lifetime": 250000},
         storage_path=storage_path,
         name="energy_market_training",
         verbose = 1,
         progress_reporter=my_multi_agent_progress_reporter,
         checkpoint_config=tune.CheckpointConfig(
-            checkpoint_frequency=10,
+            checkpoint_frequency=20,
             checkpoint_at_end=True,
-            num_to_keep=5,
+            num_to_keep=3,
         )
     ),
 ).fit()
