@@ -394,7 +394,7 @@ class P2PEnergyEnv(MultiAgentEnv):
                 # Important:
                 # when roles may change, preserving q/p across hours is usually nonsense.
                 # We reset quotes at each hour transition.
-                self._set_hour(next_hour, reset_quotes=False, clear_market=False)
+                self._set_hour(next_hour, reset_quotes=True)
 
         self.step_count = next_step_count
         self._update_state()
@@ -518,11 +518,11 @@ class P2PEnergyEnv(MultiAgentEnv):
         rem_b = bid_q.copy()
 
         s_locals = list(range(len(ask_p)))
-        self._rng_py.shuffle(s_locals)
+        # self._rng_py.shuffle(s_locals)
         s_order_local = sorted(s_locals, key=lambda i: ask_p[i])
 
         b_locals = list(range(len(bid_p)))
-        self._rng_py.shuffle(b_locals)
+        # self._rng_py.shuffle(b_locals)
         b_order_local = sorted(b_locals, key=lambda i: -bid_p[i])
 
         for bi_local in b_order_local:
@@ -685,7 +685,7 @@ class P2PEnergyEnv(MultiAgentEnv):
             return raw_hour % self.num_hours
         return min(raw_hour, self.num_hours - 1)
 
-    def _set_hour(self, hour_idx: int, reset_quotes: bool = True, clear_market: bool = True) -> None:
+    def _set_hour(self, hour_idx: int, reset_quotes: bool = True) -> None:
         self.current_hour = int(hour_idx)
 
         self.current_seller_idx = []
@@ -728,11 +728,10 @@ class P2PEnergyEnv(MultiAgentEnv):
             for idx in self.current_buyer_idx:
                 self.p[idx] = float(self.pi_gs)
 
-        if clear_market:
-            self.P.fill(0.0)
-            self.M.fill(0.0)
-            self.grid_import.fill(0.0)
-            self.grid_export.fill(0.0)
+        self.P.fill(0.0)
+        self.M.fill(0.0)
+        self.grid_import.fill(0.0)
+        self.grid_export.fill(0.0)
         # self.mu = float(0.5 * (self.pi_gb + self.pi_gs))
 
     # =====================================================================

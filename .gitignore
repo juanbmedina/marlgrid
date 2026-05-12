@@ -1,4 +1,5 @@
 __pycache__/
 rllib_venv/
 exp_results/*
+exp_results_repro/*
 data_analysis/.claude

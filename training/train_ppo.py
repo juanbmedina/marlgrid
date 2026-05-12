@@ -1,3 +1,15 @@
+# =============================================================================
+# Reproducibility preamble — MUST run before any import that might load torch
+# (Ray imports torch transitively, so these env vars go on line 1).
+# =============================================================================
+import os
+
+# Accept SEED from env var MARL_SEED (default 42). Allows launching with
+# `MARL_SEED=42 python train_ppo.py`, `MARL_SEED=43 python train_ppo.py`, ...
+SEED = int(os.environ.get("MARL_SEED", "42"))
+os.environ["PYTHONHASHSEED"] = str(SEED)
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec
@@ -17,27 +29,39 @@ from ray.tune.result import TRAINING_ITERATION
 from envs.register_env import register_energy_env
 from training.policy_mapping import policy_mode
 from training.rl_modules import EnergyRLModule
+from training.seed_callbacks import (
+    SeedEverythingCallback,
+    DeterministicPPOTorchRLModule,
+)
 from envs.energy_env import P2PEnergyEnv
 
-import os
 import json
 import shutil
 
 torch, _ = try_import_torch()
 
+# Force deterministic kernels now that torch is loaded. `warn_only=False`
+# turns any non-deterministic op into a HARD ERROR with a clear message
+# pointing at the op. Useful for diagnosing residual reproducibility
+# leaks. Switch back to `warn_only=True` for production once identified.
+torch.use_deterministic_algorithms(True, warn_only=False)
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
 register_energy_env()
 
 os.environ["RAY_AIR_NEW_OUTPUT"] = "0"
 
-
-folder_path = "/workspace/exp_results"
-
-for item in os.listdir(folder_path):
-    item_path = os.path.join(folder_path, item)
-    if os.path.isfile(item_path) or os.path.islink(item_path):
-        os.unlink(item_path)
-    elif os.path.isdir(item_path):
-        shutil.rmtree(item_path)
+# NOTE: we do NOT wipe /workspace/exp_results between runs anymore — doing so
+# would destroy results from previously-run seeds. If you need a clean start,
+# delete the folder manually before launching.
+# folder_path = "/workspace/exp_results"
+# for item in os.listdir(folder_path):
+#     item_path = os.path.join(folder_path, item)
+#     if os.path.isfile(item_path) or os.path.islink(item_path):
+#         os.unlink(item_path)
+#     elif os.path.isdir(item_path):
+#         shutil.rmtree(item_path)
 
 my_multi_agent_progress_reporter = tune.CLIReporter(
     metric_columns={
@@ -106,6 +130,26 @@ os.makedirs(storage_path, exist_ok=True)
 with open(os.path.join(storage_path, "env_config_used.json"), "w") as f:
     json.dump(ENV_CONFIG, f, indent=2, sort_keys=True)
 
+# Record seed and library versions so each run is fully identifiable later.
+import ray as _ray_for_meta
+with open(os.path.join(storage_path, "run_meta.json"), "w") as f:
+    json.dump(
+        {
+            "seed": SEED,
+            "ray_version": _ray_for_meta.__version__,
+            "torch_version": torch.__version__,
+            "cuda_available": bool(torch.cuda.is_available()),
+            "cuda_version": torch.version.cuda,
+            "cudnn_deterministic": bool(torch.backends.cudnn.deterministic),
+            "cudnn_benchmark": bool(torch.backends.cudnn.benchmark),
+            "PYTHONHASHSEED": os.environ.get("PYTHONHASHSEED"),
+            "CUBLAS_WORKSPACE_CONFIG": os.environ.get("CUBLAS_WORKSPACE_CONFIG"),
+        },
+        f,
+        indent=2,
+        sort_keys=True,
+    )
+
 model_config = {
                         "fcnet_hiddens": [128, 128],
                         "fcnet_activation": "relu",
@@ -121,14 +165,22 @@ if ENV_CONFIG["training_mode"]=='individual':
 else:
     policy_ids = env.group_policy_ids
 
-for polname in policy_ids:
+for pol_idx, polname in enumerate(policy_ids):
+    # Distinct per-policy seed, deterministic function of master SEED.
+    # Different policies => different weight init (healthy); same master SEED
+    # across runs => same weights across runs (what we want).
+    per_policy_seed = SEED * 1000 + pol_idx
+    policy_model_config = {**model_config, "_deterministic_seed": per_policy_seed}
     rl_module_specs[polname] = RLModuleSpec(
-                    model_config=model_config
-                )
+        module_class=DeterministicPPOTorchRLModule,
+        model_config=policy_model_config,
+    )
 
 config = (
     PPOConfig()
     .environment("energy_market_ma",env_config=ENV_CONFIG)
+    .debugging(seed=SEED)
+    # .callbacks(SeedEverythingCallback)
     .multi_agent(
         policies={p for p in policy_ids},
         policy_mapping_fn=energy_policy_mapping_fn,
@@ -141,7 +193,8 @@ config = (
     )
     .learners(
         num_learners = 1,
-        num_gpus_per_learner=1,
+        num_gpus_per_learner=1,  # REPRODUCIBILITY MODE: CPU only.
+                                 # Set back to 1 once reproducibility is confirmed.
     )
     .training(
         gamma=0.95,
@@ -153,12 +206,18 @@ config = (
         # use_gae=True,
     )
     .env_runners(
-        num_env_runners=8,
+        num_env_runners=8,  # REPRODUCIBILITY: single env_runner.
         num_cpus_per_env_runner=1,
         max_requests_in_flight_per_env_runner=1,
-        batch_mode="complete_episodes", 
+        batch_mode="complete_episodes",
     )
 )
+
+# Name the run folder. If MARL_RUN_TAG env var is set (e.g. by
+# run_experiments_repro.sh), use it so that repeating the same seed
+# creates separate folders (seed42_run1, seed42_run2, ...). Otherwise
+# fall back to naming by seed.
+_run_tag = os.environ.get("MARL_RUN_TAG", f"seed{SEED}")
 
 # Train through Ray Tune
 results = tune.Tuner(
@@ -167,7 +226,7 @@ results = tune.Tuner(
     run_config=tune.RunConfig(
         stop={"num_env_steps_sampled_lifetime": 250000},
         storage_path=storage_path,
-        name="energy_market_training",
+        name=f"energy_market_training_{_run_tag}",
         verbose = 1,
         progress_reporter=my_multi_agent_progress_reporter,
         checkpoint_config=tune.CheckpointConfig(
@@ -178,4 +237,4 @@ results = tune.Tuner(
     ),
 ).fit()
 
-print("\nTraining completed!")  
+print("\nTraining completed!")
