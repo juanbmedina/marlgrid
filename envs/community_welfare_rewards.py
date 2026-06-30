@@ -67,12 +67,25 @@ def r_rawlsian_maximin(
 def m_gini(values: np.ndarray) -> float:
     """Gini coefficient ∈ [0, 1].  0 = perfect equality."""
     v = np.asarray(values, dtype=np.float64)
+    
+    # Caso base: 1 o 0 elementos, o todos los valores son absolutamente nulos
     if v.size <= 1 or np.sum(np.abs(v)) < 1e-12:
         return 0.0
-    v_shifted = v - v.min() + 1e-8          # shift to non-negative
-    n = v_shifted.size
-    diffs = np.abs(v_shifted[:, None] - v_shifted[None, :]).sum()
-    return float(diffs / (2 * n * v_shifted.sum()))
+        
+    n = v.size
+    
+    # Calculamos las diferencias absolutas entre todos los pares (Numerador)
+    diffs = np.abs(v[:, None] - v[None, :]).sum()
+    
+    # Calculamos el denominador: 2 * n * sumatoria(v)
+    denominator = 2 * n * v.sum()
+    
+    # Protección matemática: Si la suma de las recompensas es cero,
+    # el índice Gini matemático clásico se indefine.
+    if abs(denominator) < 1e-12:
+        return 0.0  # O el valor por defecto que prefieras para tu entorno
+        
+    return float(diffs / denominator)
 
 
 def r_gini_fairness(
@@ -84,7 +97,7 @@ def r_gini_fairness(
     reduce inequality.
     """
     vals = np.array(list(norm_payoffs.values()), dtype=np.float64)
-    penalty = -m_gini(vals)
+    penalty = 1-m_gini(vals)
     return {aid: penalty for aid in norm_payoffs}
 
 
@@ -99,9 +112,9 @@ def m_jain_index(values: np.ndarray) -> float:
     v = np.asarray(values, dtype=np.float64)
     if v.size == 0:
         return 1.0
-    v_shifted = v - v.min() + 1e-8
-    s = v_shifted.sum()
-    ss = (v_shifted ** 2).sum()
+    # v_shifted = v - v.min() + 1e-8
+    s = v.sum()
+    ss = (v ** 2).sum()
     if ss < 1e-12:
         return 1.0
     return float(s ** 2 / (v.size * ss))

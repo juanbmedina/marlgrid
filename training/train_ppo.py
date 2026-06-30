@@ -82,25 +82,6 @@ my_multi_agent_progress_reporter = tune.CLIReporter(
     max_report_frequency = 30
 )
 
-# ENV_CONFIG = dict(
-#     enable_csv_log = False,
-#     action_mode='delta',
-#     max_steps=100,
-#     power_step=0.1,
-#     price_step=1,
-#     pi_min=60.0,
-#     pi_max=100.0,
-#     lambda_sell=50,
-#     lambda_buy=110,
-#     lambda_u=7.8,
-#     theta_u=1.0,
-#     reward_mode="payoff",   # or "welfare"
-#     training_mode="individual",
-#     alpha=0.0,
-#     beta=0.0,
-#     pair_pricing_rule="midpoint"
-# )
-
 ENV_CONFIG = dict(
     enable_csv_log=False,
     max_steps=96,           # 24 horas * 4 pasos por hora
@@ -111,16 +92,42 @@ ENV_CONFIG = dict(
     pi_max=100.0,
     lambda_sell=50,
     lambda_buy=110,
-    lambda_u=110.0,         # 7.8 aquí sigue viéndose muy mal escalado para precios 60-110
-    theta_u=1.0,
-    reward_mode="payoff",
     training_mode="individual",   # o "group" con shared_policy
-    alpha=0.1,
-    beta=0.1,
     pair_pricing_rule="midpoint",
     agents_json_path="profiles/agents_profiles_24h.json",
-    welfare_mode="none"
+    welfare_mode="gini",
+    obs_mode="local"
 )
+
+
+# ============================================================
+# Experiment registry: optionally override ENV_CONFIG based on
+# MARL_EXPERIMENT_NAME. Stays no-op if the env var is unset or "default",
+# so `python3 -m training.train_ppo` keeps working as before without
+# any wrapper.
+# ============================================================
+_exp_name = os.environ.get("MARL_EXPERIMENT_NAME", "default")
+_env_overrides = {}
+_exp_notes = ""
+
+if _exp_name and _exp_name != "default":
+    from training.experiments_registry import get_experiment
+    _exp = get_experiment(_exp_name)
+    _env_overrides = _exp.get("env_config", {})
+    _exp_notes = _exp.get("notes", "")
+
+    print("=" * 70)
+    print(f"[train] Experiment: {_exp_name}")
+    print(f"[train]   notes:    {_exp_notes or '(no notes)'}")
+    print(f"[train]   ENV_CONFIG overrides ({len(_env_overrides)} keys):")
+    for k, v in sorted(_env_overrides.items()):
+        print(f"             {k} = {v!r}")
+    print("=" * 70)
+
+    ENV_CONFIG = {**ENV_CONFIG, **_env_overrides}
+else:
+    print(f"[train] No experiment override (MARL_EXPERIMENT_NAME='{_exp_name}')")
+
 
 energy_policy_mapping_fn = policy_mode(ENV_CONFIG)
 # Use absolute path
@@ -136,6 +143,9 @@ with open(os.path.join(storage_path, "run_meta.json"), "w") as f:
     json.dump(
         {
             "seed": SEED,
+            "experiment_name": _exp_name,
+            "experiment_notes": _exp_notes,
+            "experiment_env_overrides": _env_overrides,
             "ray_version": _ray_for_meta.__version__,
             "torch_version": torch.__version__,
             "cuda_available": bool(torch.cuda.is_available()),

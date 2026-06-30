@@ -5,9 +5,11 @@
 # tmux session. Returns immediately so you can disconnect your laptop.
 #
 # Usage:
-#   bash submit_job.sh                          # default seeds (42 43 44)
-#   SEEDS="42 43 44 45 46" bash submit_job.sh
-#   SEEDS="42 42" bash submit_job.sh            # repro check
+#   bash submit_job.sh                                                      # default: 1 exp x 3 seeds
+#   SEEDS="42 43 44 45 46" bash submit_job.sh                               # custom seeds
+#   EXPERIMENTS="base partial shuffle" bash submit_job.sh                   # exp queue, default seeds
+#   EXPERIMENTS="base partial shuffle" SEEDS="42 43 44" bash submit_job.sh  # full sweep (9 runs)
+#   SEEDS="42 42" bash submit_job.sh                                        # repro check
 
 set -e
 
@@ -16,6 +18,38 @@ source "${SCRIPT_DIR}/_marlgrid_config.sh"
 
 # Seeds (override via env)
 SEEDS=${SEEDS:-"42 43 44"}
+
+# Experiments (override via env). Default = "default" sentinel, which keeps
+# the same behavior as before (uses train_ppo.py's hardcoded ENV_CONFIG).
+EXPERIMENTS=${EXPERIMENTS:-"default"}
+EXPERIMENTS_CSV=$(echo "${EXPERIMENTS}" | tr ' ' ',')
+
+# Pre-flight: validate experiment names exist in the registry BEFORE we
+# sync GB of code to the server.
+if [ "${EXPERIMENTS_CSV}" != "default" ]; then
+  echo ""
+  echo "=== Validating experiment names against registry ==="
+  python3 - <<PYEOF || { echo "Aborting: invalid experiment name(s)."; exit 1; }
+import sys
+try:
+    from training.experiments_registry import EXPERIMENTS as REG
+except Exception as e:
+    print(f"ERROR: cannot import training.experiments_registry: {e}", file=sys.stderr)
+    sys.exit(1)
+requested = "${EXPERIMENTS_CSV}".split(",")
+unknown = [e for e in requested if e not in REG]
+if unknown:
+    print(f"ERROR: unknown experiment(s): {unknown}", file=sys.stderr)
+    print(f"Available: {sorted(REG.keys())}", file=sys.stderr)
+    sys.exit(1)
+print(f"  OK, all {len(requested)} experiment(s) found in registry:")
+for name in requested:
+    notes = REG[name].get("notes", "")
+    print(f"    - {name}: {notes}")
+PYEOF
+fi
+
+
 # SSH does not preserve quoting of space-separated args; encode as CSV.
 SEEDS_CSV=$(echo "${SEEDS}" | tr ' ' ',')
 
@@ -63,18 +97,25 @@ ssh -p "${REMOTE_PORT}" "${REMOTE_USER}@${REMOTE_HOST}" \
 ############################
 # 3. Launch in detached tmux session
 ############################
+N_SEEDS=$(echo "${SEEDS}" | wc -w)
+N_EXPS=$(echo "${EXPERIMENTS}" | wc -w)
+N_TOTAL=$((N_SEEDS * N_EXPS))
+
 echo ""
 echo "=== Launching tmux session '${TMUX_SESSION}' on server ==="
-echo "  SEEDS:        ${SEEDS}"
+echo "  SEEDS:        ${SEEDS}      (${N_SEEDS})"
+echo "  EXPERIMENTS:  ${EXPERIMENTS}  (${N_EXPS})"
+echo "  TOTAL RUNS:   ${N_TOTAL}"
 echo "  TRAIN_MODULE: ${TRAIN_MODULE}"
 echo "  LOG:          ${LOG_FILE}"
 echo ""
 
-# We pass SEEDS as CSV (no spaces) so the inner shell quoting cannot break it.
+# We pass SEEDS / EXPERIMENTS as CSV (no spaces) so the inner shell
+# quoting cannot break them.
 ssh -p "${REMOTE_PORT}" "${REMOTE_USER}@${REMOTE_HOST}" \
   "tmux new-session -d -s ${TMUX_SESSION} \
      'cd ${REMOTE_BASE} && \
-      bash ${REMOTE_BASE}/_remote_runner.sh ${SEEDS_CSV} ${TRAIN_MODULE} \
+      bash ${REMOTE_BASE}/_remote_runner.sh ${SEEDS_CSV} ${EXPERIMENTS_CSV} ${TRAIN_MODULE} \
         > ${LOG_FILE} 2>&1'"
 
 # Verify it actually started

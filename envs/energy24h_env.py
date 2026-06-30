@@ -77,37 +77,12 @@ class P2PEnergyEnv(MultiAgentEnv):
                 f"lambda_sell ({self.lambda_sell}) must be <= lambda_buy ({self.lambda_buy})."
             )
 
-        # ---------------- buyer utility ----------------
-        self.lambda_u = float(config.get("lambda_u", self.pi_gs))
-        self.theta_u = float(config.get("theta_u", 1.0))
-        if self.theta_u <= 0:
-            raise ValueError("theta_u must be > 0 for concave utility.")
-
-        # ---------------- reward mode ----------------
-        self.reward_mode = str(config.get("reward_mode", "payoff")).lower()
-        if self.reward_mode not in ("payoff", "welfare"):
-            raise ValueError("reward_mode must be 'payoff' or 'welfare'")
-
-        self.beta = float(config.get("beta", 0.0))
-        self.alpha = float(config.get("alpha", 0.0))
-        self.training_mode = str(config.get("training_mode", "individual")).lower()
-
         # Welfare reward configuration
         self.welfare_mode = str(config.get("welfare_mode", "none")).lower()
+        self.norm_reward = bool(config.get("norm_reward", False))
         # Options: "none", "utilitarian", "rawlsian", "gini", "jain",
         #          "proportional", "grid_independence", "demand_satisfaction",
         #          "price_stability", "envy", "composite"
-
-        self.alpha_individual = float(config.get("alpha_individual", 0.6))
-        # 1.0 = pure selfish,  0.0 = pure social
-        
-        # For composite mode: per-metric weights
-        self.welfare_weights = config.get("welfare_weights", {
-            "utilitarian":        0.25,
-            "gini":               0.25,
-            "grid_independence":  0.25,
-            "demand_satisfaction": 0.25,
-        })
 
         # ---------------- pairwise settlement ----------------
         self.pair_pricing_rule = str(config.get("pair_pricing_rule", "ask")).lower()
@@ -196,7 +171,15 @@ class P2PEnergyEnv(MultiAgentEnv):
         # ---------------- observation spaces ----------------
         # Global:
         # [role(N), cap(N), q(N), p(N), D(N), G(N), grid_import(N), grid_export(N), mu, hour_norm, step_norm]
-        global_obs_dim = 2 * self.n_agents + 2
+
+        self.obs_config = str(config.get("obs_mode", "total")).lower()
+
+        if self.obs_config == 'total':
+            global_obs_dim = 8 * self.n_agents + 2
+        elif self.obs_config == 'partial':
+            global_obs_dim = 2 * self.n_agents + 2
+        elif self.obs_config == 'local':
+            global_obs_dim = 2
 
         # Agent-local:
         # [is_seller, is_buyer, is_neutral, idx_norm, D_i, G_i, net_i, cap_i, q_i, p_i,
@@ -287,8 +270,16 @@ class P2PEnergyEnv(MultiAgentEnv):
                 else:
                     min_cost = float(self.pi_gb)
 
-                p_state = min_cost + a_p * (float(self.pi_gs) - min_cost)
-                self.p[idx] = np.clip(p_state, min_cost, self.pi_gs)
+                if min_cost > self.pi_gs:
+                    # Minimum profitable price exceeds the admissible band.
+                    # No buyer can bid above pi_gs, so the offer matches no
+                    # buyer. The seller leaves the P2P market and exports its
+                    # full capacity to the grid (offered quantity set to zero).
+                    self.q[idx] = 0.0
+                    self.p[idx] = min_cost
+                else:
+                    p_state = min_cost + a_p * (float(self.pi_gs) - min_cost)
+                    self.p[idx] = np.clip(p_state, min_cost, self.pi_gs)
                 
 
             elif self.role[idx] == -1:
@@ -320,11 +311,30 @@ class P2PEnergyEnv(MultiAgentEnv):
         
         if self.welfare_mode == "none":
             # Original behaviour: payoff + optional beta-sharing
+
+            if self.norm_reward == True:
+                rewards = {
+                    aid: float(norm_payoffs[aid])
+                    for aid in self.possible_agents
+                }
+            else:
+                rewards = {
+                    aid: float(payoffs[aid])
+                    for aid in self.possible_agents
+                }
+        elif self.welfare_mode in ["jain-only", "gini-only"]:
+                        # Single social metric mode
+            METRIC_FNS = {
+                "gini-only":               lambda: r_gini_fairness(norm_payoffs),
+                "jain-only":               lambda: r_jain_fairness(norm_payoffs),
+            }
+            social_r = METRIC_FNS[self.welfare_mode]()
             rewards = {
-                aid: float(payoffs[aid])
+                # aid: float(self.reward_weights["payoff"]*norm_payoffs[aid] + self.reward_weights["payoff"]*social_r[aid])
+                aid: float(social_r[aid])
                 for aid in self.possible_agents
             }
-        
+
         else:
             # Single social metric mode
             METRIC_FNS = {
@@ -346,7 +356,8 @@ class P2PEnergyEnv(MultiAgentEnv):
             }
             social_r = METRIC_FNS[self.welfare_mode]()
             rewards = {
-                aid: float(norm_payoffs[aid] + social_r[aid])
+                # aid: float(self.reward_weights["payoff"]*norm_payoffs[aid] + self.reward_weights["payoff"]*social_r[aid])
+                aid: float(norm_payoffs[aid]*social_r[aid])
                 for aid in self.possible_agents
             }
         
@@ -433,20 +444,38 @@ class P2PEnergyEnv(MultiAgentEnv):
         hour_norm = 0.0 if self.num_hours <= 1 else float(self.current_hour) / float(self.num_hours - 1)
         step_norm = float(self.step_count) / float(max(1, self.max_steps))
 
-        global_vec = np.concatenate(
-            [
-                # self.role.astype(np.float32),
-                # self.cap,
-                # self.q,
-                # self.p,
-                # D,
-                # G,
-                self.grid_import,
-                self.grid_export,
-                np.array([hour_norm, step_norm], dtype=np.float32),
-            ],
-            axis=0,
-        ).astype(np.float32)
+
+        if self.obs_config == 'total':
+            global_vec = np.concatenate(
+                [
+                    self.role.astype(np.float32),
+                    self.cap,
+                    self.q,
+                    self.p,
+                    D,
+                    G,
+                    self.grid_import,
+                    self.grid_export,
+                    np.array([hour_norm, step_norm], dtype=np.float32),
+                ],
+                axis=0,
+            ).astype(np.float32)
+        elif self.obs_config == 'partial':
+            global_vec = np.concatenate(
+                [
+                    self.grid_import,
+                    self.grid_export,
+                    np.array([hour_norm, step_norm], dtype=np.float32),
+                ],
+                axis=0,
+            ).astype(np.float32)
+        elif self.obs_config == 'local':
+            global_vec = np.concatenate(
+                [
+                    np.array([hour_norm, step_norm], dtype=np.float32),
+                ],
+                axis=0,
+            ).astype(np.float32)
 
         obs: Dict[str, np.ndarray] = {}
 
