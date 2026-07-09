@@ -1,0 +1,31 @@
+services:
+  marlgrid:
+    # Construye el entorno desde tu Dockerfile.rllib usando el repo local como contexto.
+    build:
+      context: .
+      dockerfile: Dockerfile.rllib
+    image: marlgrid:latest
+    container_name: marlgrid
+
+    # Monta el repo del host en /workspace. El codigo vive en el host, el entorno en la imagen.
+    # Cualquier resultado escrito en /workspace/exp_results aparece en el host automaticamente.
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+
+    # Equivalente a --gpus all. Requiere driver NVIDIA y nvidia-container-toolkit en el host.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    # Ray con 8 env runners necesita memoria compartida amplia. Sin esto puede fallar.
+    shm_size: "4gb"
+
+    # Mantiene el contenedor vivo para entrar con: docker compose exec marlgrid bash
+    stdin_open: true
+    tty: true
+    command: /bin/bash

@@ -8,6 +8,7 @@ MARLgrid is a simulation framework for training and evaluating cooperative and c
 
 ## Table of Contents
 
+- [Installation](#installation)
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Environment: P2PEnergyEnv](#environment-p2penergyenv)
@@ -25,6 +26,79 @@ MARLgrid is a simulation framework for training and evaluating cooperative and c
 - [Requirements](#requirements)
 - [Getting Started](#getting-started)
 - [License](#license)
+
+---
+
+## Installation
+
+MARLgrid ships with a Docker-based setup that pins every dependency, so the runtime environment is identical on any machine. This is the recommended path and the one that guarantees reproducibility. The source code is mounted from the host, so you can edit scripts in your usual editor and the container runs them without rebuilding the image.
+
+### Prerequisites
+
+- **Docker Engine** (20.10+, with `docker compose` support)
+- **git**
+- **NVIDIA driver** and **NVIDIA Container Toolkit** — only needed for GPU training. The toolkit lets the container access the host GPU.
+
+To confirm the GPU is visible to Docker:
+
+```bash
+nvidia-smi                     # shows the host driver
+docker info | grep -i runtime  # should list "nvidia"
+```
+
+If `nvidia-smi` prints the GPU table, the host is ready. Without a GPU the framework runs on CPU, at the cost of slower training.
+
+### 1. Clone the repository
+
+```bash
+git clone https://github.com/juanbmedina/marlgrid.git
+cd marlgrid
+```
+
+To pin an experiment to an exact code state, clone a specific tag instead of the latest `main`:
+
+```bash
+git clone --branch v1.0 https://github.com/juanbmedina/marlgrid.git
+```
+
+### 2. Build and start the environment (Docker Compose)
+
+The `docker-compose.yml` at the repository root automates the process. A single command builds the image from `Dockerfile.rllib`, creates the container with GPU access, and mounts the repository at `/workspace`:
+
+```bash
+docker compose up -d --build
+```
+
+The first run downloads the base image and compiles dependencies, so it takes a few minutes. Later runs reuse the built image. Open an interactive shell inside the container with:
+
+```bash
+docker compose exec marlgrid bash
+```
+
+Because the repository is mounted, results written to `exp_results/` appear directly on the host. Stop the container with:
+
+```bash
+docker compose down
+```
+
+### Alternative: manual image build
+
+You can build and run the image with plain Docker commands instead of Compose:
+
+```bash
+docker build -f Dockerfile.rllib -t marlgrid .
+docker run --gpus all -it -v $(pwd):/workspace -w /workspace marlgrid bash
+```
+
+### Verify the installation
+
+Inside the container, a quick check confirms PyTorch sees the GPU:
+
+```bash
+python3 -c "import torch; print(torch.cuda.is_available())"
+```
+
+A `True` result means the environment is installed with GPU support. From here, see [Getting Started](#getting-started) to launch your first training run.
 
 ---
 
@@ -371,7 +445,3 @@ EVAL_NUM_EPISODES=100 python -m training.evaluate
 Open `reward_analysis.ipynb` to visualize payoff distributions, welfare metrics over time, price convergence, and P2P vs. grid trade volumes.
 
 ---
-
-## License
-
-*To be specified.*
