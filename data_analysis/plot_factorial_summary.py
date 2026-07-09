@@ -281,7 +281,7 @@ def _draw_metric_heatmap(ax, grid, annot, cmap: str, title: str) -> None:
 def plot_factorial_heatmap(
     cell_stats,
     metrics: Tuple[str, ...] = ("payoff", "gini"),
-    figsize: Tuple[float, float] = (12, 4),  # 1. Invertido para que sea más ancho que alto
+    figsize: Tuple[float, float] = (4, 12),  # 1. Invertido para que sea más ancho que alto
     title: Optional[str] = "Efficiency-equity grid (mean over seeds)",
     payoff_decimals: int = 0,
     index_decimals: int = 3,
@@ -297,12 +297,12 @@ def plot_factorial_heatmap(
     figure; otherwise a new 1 x len(metrics) figure is created.
     """
     cmap_for = {"payoff": CMAP_PAYOFF, "gini": CMAP_GINI}
-    title_for = {"payoff": "Payoff", "gini": "Gini coeff."}
+    title_for = {"payoff": "Community Payoff", "gini": "Gini coeff."}
     dec_for = {"payoff": payoff_decimals, "gini": index_decimals}
 
     if ax is None:
         # 2. Cambiado a (1, len(metrics)) para tener 1 fila y N columnas horizontales
-        fig, ax = plt.subplots(1, len(metrics), figsize=figsize)
+        fig, ax = plt.subplots(len(metrics), figsize=figsize)
     else:
         fig = ax[0].figure
     ax = np.atleast_1d(ax)

@@ -176,6 +176,20 @@ def evaluate_and_save_states(checkpoint_path: str, num_episodes: int, output_csv
     print("=" * 90 + "\n")
 
     env_config = load_env_config_used(checkpoint_path)
+    env_config["phase"] = "eval"
+
+    _scale = float(os.environ.get("MARL_REALITY_SCALE", "1.0"))
+    if _scale != 1.0:
+        for _k in ("sigma_reality_gen", "sigma_reality_dem"):
+            _v = env_config.get(_k, 0.0)
+            if isinstance(_v, dict):
+                env_config[_k] = {a: x * _scale for a, x in _v.items()}
+            elif isinstance(_v, (list, tuple)):
+                env_config[_k] = [x * _scale for x in _v]
+            else:
+                env_config[_k] = float(_v) * _scale
+
+
     energy_policy_mapping_fn = policy_mode(env_config)
 
     env = P2PEnergyEnv(env_config)

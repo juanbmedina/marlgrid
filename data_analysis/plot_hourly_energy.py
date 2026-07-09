@@ -1455,6 +1455,7 @@ def plot_scenario_metrics_box(
     show_points: bool = True,
     ax: Optional[np.ndarray] = None,
     show_xlabel: bool = True,
+    n_figures: Optional[float] = 3
 ) -> Tuple[plt.Figure, np.ndarray, List[dict]]:
     """
     Figura comparativa de escenarios con 3 subplots: Total | Jain | Gini.
@@ -1514,7 +1515,7 @@ def plot_scenario_metrics_box(
     x = np.arange(len(exp_labels))
 
     if ax is None:
-        fig, ax = plt.subplots(1, 3, figsize=figsize)
+        fig, ax = plt.subplots(1, n_figures, figsize=figsize)
     else:
         fig = ax[0].figure
 

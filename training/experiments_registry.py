@@ -215,6 +215,104 @@ EXPERIMENTS = {
         "notes": "Partial observable, jain index",
     },
 
+    # ============================================================
+    # Forecast-to-reality robustness (oracle / naive / dr)
+    # Same cell as R2-S3 (local obs + Jain). All three share the same
+    # reality at a given seed; they differ only in what training sees.
+    # ============================================================
+
+    "fr_oracle": {
+        "env_config": {
+            "enable_csv_log": False,
+            "max_steps": 96,           # 24 horas * 4 pasos por hora
+            "steps_per_hour": 4,
+            "hour_mode": "hold_last",
+            "action_mode": "absolute", # ya no delta
+            "pi_min": 60.0,
+            "pi_max": 100.0,
+            "lambda_sell": 50,
+            "lambda_buy": 110,
+            "training_mode": "individual",   # o "group" con shared_policy
+            "pair_pricing_rule": "midpoint",
+            "agents_json_path": "profiles/agents_profiles_24h.json",
+            "welfare_mode": "jain",
+            "norm_reward": True,
+            "obs_mode": "local",
+            "train_regime": "oracle",  # entrena en la reality, despliega en la reality
+            "sigma_reality_gen": {"agent_0": 0.03, "agent_1": 0.05, "agent_2": 0.05,
+                                  "agent_3": 0.15, "agent_4": 0.15, "agent_5": 0.0},
+            "sigma_reality_dem": {"agent_0": 0.05, "agent_1": 0.09, "agent_2": 0.09,
+                                  "agent_3": 0.09, "agent_4": 0.09, "agent_5": 0.09},
+            "sigma_train_gen":   {"agent_0": 0.03, "agent_1": 0.05, "agent_2": 0.05,
+                                  "agent_3": 0.15, "agent_4": 0.15, "agent_5": 0.0},
+            "sigma_train_dem":   {"agent_0": 0.05, "agent_1": 0.09, "agent_2": 0.09,
+                                  "agent_3": 0.09, "agent_4": 0.09, "agent_5": 0.09},
+        },
+        "notes": "Forecast-reality: clairvoyant ceiling (train on the realized day)",
+    },
+
+    "fr_naive": {
+        "env_config": {
+            "enable_csv_log": False,
+            "max_steps": 96,           # 24 horas * 4 pasos por hora
+            "steps_per_hour": 4,
+            "hour_mode": "hold_last",
+            "action_mode": "absolute", # ya no delta
+            "pi_min": 60.0,
+            "pi_max": 100.0,
+            "lambda_sell": 50,
+            "lambda_buy": 110,
+            "training_mode": "individual",   # o "group" con shared_policy
+            "pair_pricing_rule": "midpoint",
+            "agents_json_path": "profiles/agents_profiles_24h.json",
+            "welfare_mode": "jain",
+            "norm_reward": True,
+            "obs_mode": "local",
+            "train_regime": "naive",   # entrena en el pronóstico, despliega en la reality
+            "sigma_reality_gen": {"agent_0": 0.03, "agent_1": 0.05, "agent_2": 0.05,
+                                  "agent_3": 0.15, "agent_4": 0.15, "agent_5": 0.0},
+            "sigma_reality_dem": {"agent_0": 0.05, "agent_1": 0.09, "agent_2": 0.09,
+                                  "agent_3": 0.09, "agent_4": 0.09, "agent_5": 0.09},
+            # sigma_train_* no se usan en 'naive' (entrena sobre el pronóstico
+            # sin ruido); se dejan por simetria y para cambiar de regimen sin editar.
+            "sigma_train_gen":   {"agent_0": 0.03, "agent_1": 0.05, "agent_2": 0.05,
+                                  "agent_3": 0.15, "agent_4": 0.15, "agent_5": 0.0},
+            "sigma_train_dem":   {"agent_0": 0.05, "agent_1": 0.09, "agent_2": 0.09,
+                                  "agent_3": 0.09, "agent_4": 0.09, "agent_5": 0.09},
+        },
+        "notes": "Forecast-reality: floor (train on forecast, deploy on reality)",
+    },
+
+    "fr_dr": {
+        "env_config": {
+            "enable_csv_log": False,
+            "max_steps": 96,           # 24 horas * 4 pasos por hora
+            "steps_per_hour": 4,
+            "hour_mode": "hold_last",
+            "action_mode": "absolute", # ya no delta
+            "pi_min": 60.0,
+            "pi_max": 100.0,
+            "lambda_sell": 50,
+            "lambda_buy": 110,
+            "training_mode": "individual",   # o "group" con shared_policy
+            "pair_pricing_rule": "midpoint",
+            "agents_json_path": "profiles/agents_profiles_24h.json",
+            "welfare_mode": "jain",
+            "norm_reward": True,
+            "obs_mode": "local",
+            "train_regime": "dr",      # entrena resampleando la nube, despliega en la reality
+            "sigma_reality_gen": {"agent_0": 0.03, "agent_1": 0.05, "agent_2": 0.05,
+                                  "agent_3": 0.15, "agent_4": 0.15, "agent_5": 0.0},
+            "sigma_reality_dem": {"agent_0": 0.05, "agent_1": 0.09, "agent_2": 0.09,
+                                  "agent_3": 0.09, "agent_4": 0.09, "agent_5": 0.09},
+            "sigma_train_gen":   {"agent_0": 0.03, "agent_1": 0.05, "agent_2": 0.05,
+                                  "agent_3": 0.15, "agent_4": 0.15, "agent_5": 0.0},
+            "sigma_train_dem":   {"agent_0": 0.05, "agent_1": 0.09, "agent_2": 0.09,
+                                  "agent_3": 0.09, "agent_4": 0.09, "agent_5": 0.09},
+        },
+        "notes": "Forecast-reality: domain randomization at central cloud width",
+    },
+
 
 
 }

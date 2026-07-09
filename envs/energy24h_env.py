@@ -270,16 +270,8 @@ class P2PEnergyEnv(MultiAgentEnv):
                 else:
                     min_cost = float(self.pi_gb)
 
-                if min_cost > self.pi_gs:
-                    # Minimum profitable price exceeds the admissible band.
-                    # No buyer can bid above pi_gs, so the offer matches no
-                    # buyer. The seller leaves the P2P market and exports its
-                    # full capacity to the grid (offered quantity set to zero).
-                    self.q[idx] = 0.0
-                    self.p[idx] = min_cost
-                else:
-                    p_state = min_cost + a_p * (float(self.pi_gs) - min_cost)
-                    self.p[idx] = np.clip(p_state, min_cost, self.pi_gs)
+                p_state = min_cost + a_p * (float(self.pi_gs) - min_cost)
+                self.p[idx] = np.clip(p_state, min_cost, self.pi_gs)
                 
 
             elif self.role[idx] == -1:

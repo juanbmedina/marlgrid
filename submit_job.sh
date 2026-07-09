@@ -81,6 +81,7 @@ rsync -avz --delete \
   --exclude='runs_archive/' \
   --exclude='exp_results/' \
   --exclude='exp_results_repro/' \
+  --exclude='.git/' \
   -e "ssh -p ${REMOTE_PORT}" \
   "${LOCAL_PROJECT}/" \
   "${REMOTE_USER}@${REMOTE_HOST}:${REMOTE_BASE}"

@@ -128,7 +128,7 @@ if _exp_name and _exp_name != "default":
 else:
     print(f"[train] No experiment override (MARL_EXPERIMENT_NAME='{_exp_name}')")
 
-
+ENV_CONFIG["seed"] = SEED
 energy_policy_mapping_fn = policy_mode(ENV_CONFIG)
 # Use absolute path
 storage_path = os.path.abspath("./exp_results")
