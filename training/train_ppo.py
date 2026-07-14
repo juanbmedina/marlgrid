@@ -166,7 +166,7 @@ model_config = {
                         "vf_share_layers": True,
                     }
 
-env = P2PEnergyEnv()
+env = P2PEnergyEnv(ENV_CONFIG)
 
 rl_module_specs = {}
 

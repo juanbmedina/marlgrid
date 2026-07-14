@@ -104,12 +104,6 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.n_agents = len(self.agents_all)
         self.num_hours = self._validate_profile_horizon(self.agents_all)
 
-        # ---------------- forecast noise ----------------
-        self.profile_noise_std = float(config.get("profile_noise_std", 0.0))
-        self.profile_noise_type = str(config.get("profile_noise_type", "gaussian")).lower()
-        if self.profile_noise_type not in ("gaussian", "uniform"):
-            raise ValueError("profile_noise_type must be 'gaussian' or 'uniform'")
-
         inferred_sph = max(1, self.max_steps // max(1, self.num_hours))
         self.steps_per_hour = int(config.get("steps_per_hour", inferred_sph))
         if self.steps_per_hour <= 0:
@@ -119,13 +113,119 @@ class P2PEnergyEnv(MultiAgentEnv):
         if self.hour_mode not in ("hold_last", "wrap"):
             raise ValueError("hour_mode must be 'hold_last' or 'wrap'")
 
-        # ---------------- per-env RNGs (reproducibility) ----------------
-        # We own two independent generators so nothing in this env ever reads
-        # from np.random.* or random.* global state. Reseeded in reset(seed=...).
-        #   _rng_np : numpy Generator, used for profile noise.
-        #   _rng_py : stdlib Random,   used for market-clearing tie-break shuffles.
-        self._rng_np = np.random.default_rng()
-        self._rng_py = random.Random()
+        # ================================================================
+        # Forecast vs reality (forecast-error study)
+        # ================================================================
+        # The agent is trained on a "forecast" and deployed on a "reality".
+        # The gap between them is the forecast error. profile_mode selects which
+        # profile feeds an episode:
+        #   "forecast"   : base profiles, unperturbed, frozen.       (naive train)
+        #   "reality"    : base + a single frozen error draw.        (deploy / oracle train)
+        #   "randomized" : base + a fresh error draw every episode.  (DR train)
+        #
+        # profile_mode is normally DERIVED from (train_regime, phase). Set it
+        # directly only to bypass that mapping.
+        #   regime "oracle": train on reality, deploy on reality   (clairvoyant ceiling)
+        #   regime "naive" : train on forecast, deploy on reality  (forecast-error floor)
+        #   regime "dr"    : train on the cloud,  deploy on reality (domain randomization)
+        self.train_regime = config.get("train_regime", None)
+        if self.train_regime is not None:
+            self.train_regime = str(self.train_regime).lower()
+            if self.train_regime not in ("oracle", "naive", "dr"):
+                raise ValueError("train_regime must be 'oracle', 'naive', or 'dr'")
+
+        self.phase = str(config.get("phase", "train")).lower()
+        if self.phase not in ("train", "eval"):
+            raise ValueError("phase must be 'train' or 'eval'")
+
+        self.noise_dist = str(
+            config.get("noise_dist", config.get("profile_noise_type", "gaussian"))
+        ).lower()
+        if self.noise_dist not in ("gaussian", "uniform"):
+            raise ValueError("noise_dist must be 'gaussian' or 'uniform'")
+
+        # Independent magnitudes for generation and demand, NOW PER AGENT:
+        # diesel/dispatchable units are almost perfectly forecastable (sigma ~0),
+        # while variable resources carry a larger error. Each sigma_* may be a
+        #   - scalar             : same value for every agent (broadcast), or
+        #   - list of length N   : one value per agent, in JSON order, or
+        #   - dict {name: value} : per-agent, missing agents default to 0.
+        # Stored internally as float arrays of shape (n_agents,).
+        #   sigma_train_*  : width of the DR cloud during training (hyperparameter).
+        #   sigma_reality_*: how far the deployed reality falls from the forecast.
+        self.sigma_train_gen = self._parse_sigma(config.get("sigma_train_gen", 0.0), "sigma_train_gen")
+        self.sigma_train_dem = self._parse_sigma(config.get("sigma_train_dem", 0.0), "sigma_train_dem")
+        self.sigma_reality_gen = self._parse_sigma(config.get("sigma_reality_gen", 0.0), "sigma_reality_gen")
+        self.sigma_reality_dem = self._parse_sigma(config.get("sigma_reality_dem", 0.0), "sigma_reality_dem")
+
+        # Legacy fallback: a single profile_noise_std with no train_regime keeps
+        # the old "resample every episode" behaviour, so existing experiments are
+        # untouched.
+        self._legacy_noise_std = float(config.get("profile_noise_std", 0.0))
+
+        # Resolve the active mode and the sigmas that apply to it.
+        self.profile_mode, self._sigma_gen, self._sigma_dem = self._resolve_profile_mode(
+            config.get("profile_mode", None)
+        )
+
+        # ---------------- seeding (done ONCE, never in reset) ----------------
+        # Two explicitly-seeded streams, seeded here and NEVER reseeded in
+        # reset(), so the DR noise stream advances across episodes (no collapse)
+        # and the reality stays a single frozen draw ("the day in question").
+        # The run seed comes from config (train_ppo.py / evaluate.py inject it)
+        # and is combined with worker/vector index so parallel workers explore
+        # different day sequences while remaining reproducible.
+        self._run_seed = config.get("seed", None)
+        worker_index = int(getattr(config, "worker_index", 0) or 0)
+        vector_index = int(getattr(config, "vector_index", 0) or 0)
+
+        if self._run_seed is None:
+            noise_ss, tie_ss = np.random.SeedSequence().spawn(2)
+        else:
+            noise_ss, tie_ss = np.random.SeedSequence(
+                [int(self._run_seed), worker_index, vector_index]
+            ).spawn(2)
+
+        #   _noise_rng : numpy Generator, advancing stream for DR profile noise.
+        #   _tie_rng   : stdlib Random,   market-clearing tie-break shuffles.
+        self._noise_rng = np.random.default_rng(noise_ss)
+        self._tie_rng = random.Random(int(tie_ss.generate_state(1)[0]))
+
+        # reality_seed defaults to the run seed (reuse the training seeds), so
+        # seed 42 -> reality_42 for oracle/naive/dr alike. The reality is
+        # deliberately INDEPENDENT of worker/vector index, so the held-out day is
+        # identical across all workers and all regimes at a given seed.
+        reality_seed = config.get("reality_seed", None)
+        if reality_seed is None:
+            reality_seed = self._run_seed
+        self._reality_seed = reality_seed
+
+        # ---------------- build forecast and reality profiles ----------------
+        self._forecast_D = np.array(
+            [ag.consumer_profile for ag in self.agents_all], dtype=np.float32
+        )
+        self._forecast_G = np.array(
+            [ag.generator_profile for ag in self.agents_all], dtype=np.float32
+        )
+
+        # Frozen reality: one error draw on top of the forecast, generated once
+        # from a dedicated RNG so consuming the DR stream never changes it.
+        if self._reality_seed is None:
+            reality_rng = np.random.default_rng()
+        else:
+            reality_rng = np.random.default_rng(
+                np.random.SeedSequence(int(self._reality_seed))
+            )
+        self._reality_D, self._reality_G = self._apply_profile_noise(
+            self._forecast_D, self._forecast_G, reality_rng,
+            sigma_gen=self.sigma_reality_gen, sigma_dem=self.sigma_reality_dem,
+        )
+
+        # Active profile for the current episode; finalized in reset().
+        if self.profile_mode == "reality":
+            self._active_D, self._active_G = self._reality_D, self._reality_G
+        else:
+            self._active_D, self._active_G = self._forecast_D, self._forecast_G
 
         # ---------------- fixed agent IDs ----------------
         # Use the JSON keys directly: agent_0, agent_1, ...
@@ -195,9 +295,6 @@ class P2PEnergyEnv(MultiAgentEnv):
         # evaluation compatibility
         self.state: Dict[str, object] = {}
 
-        # initialize noisy profiles (no noise on first call, seed not set yet)
-        self._sample_noisy_profiles()
-
         # initialize hour 0
         self._set_hour(0, reset_quotes=True)
 
@@ -207,27 +304,23 @@ class P2PEnergyEnv(MultiAgentEnv):
 
     def reset(self, *, seed=None, options=None):
         # Seed gym's self.np_random (required by the gymnasium contract).
-        # Do NOT touch np.random or random module globals.
+        # Do NOT touch np.random or random module globals, and do NOT reseed our
+        # own streams: the DR noise stream must advance across episodes and the
+        # reality is a frozen draw. All seeding happened once in __init__.
 
         if self.episode_id < 3:  # only log first 3 episodes to avoid spam
             print(f"[ENV_RESET pid={os.getpid()} ep={self.episode_id}] "
-                f"seed={seed}  "
-                f"rng_np_state_hash={hash(str(self._rng_np.bit_generator.state)) & 0xffff:04x}")
-   
-        super().reset(seed=seed)
+                f"mode={self.profile_mode} regime={self.train_regime} phase={self.phase} "
+                f"run_seed={self._run_seed} reality_seed={self._reality_seed} "
+                f"noise_state_hash={hash(str(self._noise_rng.bit_generator.state)) & 0xffff:04x}")
 
-        if seed is not None:
-            # Derive two independent child seeds so the numpy stream and the
-            # python stream cannot shadow each other.
-            ss = np.random.SeedSequence(seed)
-            np_seed, py_seed = ss.spawn(2)
-            self._rng_np = np.random.default_rng(np_seed)
-            self._rng_py = random.Random(int(py_seed.generate_state(1)[0]))
+        super().reset(seed=seed)
 
         self.step_count = 0
         self.episode_id += 1
 
-        self._sample_noisy_profiles()
+        # Choose this episode's (D, G) profile.
+        self._set_active_profiles()
         self._set_hour(0, reset_quotes=True)
         self._update_state()
 
@@ -270,8 +363,16 @@ class P2PEnergyEnv(MultiAgentEnv):
                 else:
                     min_cost = float(self.pi_gb)
 
-                p_state = min_cost + a_p * (float(self.pi_gs) - min_cost)
-                self.p[idx] = np.clip(p_state, min_cost, self.pi_gs)
+                if min_cost > self.pi_gs:
+                    # Minimum profitable price exceeds the admissible band.
+                    # No buyer can bid above pi_gs, so the offer matches no
+                    # buyer. The seller leaves the P2P market and exports its
+                    # full capacity to the grid (offered quantity set to zero).
+                    self.q[idx] = 0.0
+                    self.p[idx] = min_cost
+                else:
+                    p_state = min_cost + a_p * (float(self.pi_gs) - min_cost)
+                    self.p[idx] = np.clip(p_state, min_cost, self.pi_gs)
                 
 
             elif self.role[idx] == -1:
@@ -539,11 +640,11 @@ class P2PEnergyEnv(MultiAgentEnv):
         rem_b = bid_q.copy()
 
         s_locals = list(range(len(ask_p)))
-        self._rng_py.shuffle(s_locals)
+        self._tie_rng.shuffle(s_locals)
         s_order_local = sorted(s_locals, key=lambda i: ask_p[i])
 
         b_locals = list(range(len(bid_p)))
-        self._rng_py.shuffle(b_locals)
+        self._tie_rng.shuffle(b_locals)
         b_order_local = sorted(b_locals, key=lambda i: -bid_p[i])
 
         for bi_local in b_order_local:
@@ -713,8 +814,8 @@ class P2PEnergyEnv(MultiAgentEnv):
         self.current_buyer_idx = []
 
         for idx, ag in enumerate(self.agents_all):
-            ag.D = float(self._noisy_D[idx, self.current_hour])
-            ag.G = float(self._noisy_G[idx, self.current_hour])
+            ag.D = float(self._active_D[idx, self.current_hour])
+            ag.G = float(self._active_G[idx, self.current_hour])
 
             net = ag.G - ag.D
 
@@ -760,31 +861,123 @@ class P2PEnergyEnv(MultiAgentEnv):
     # Aux
     # =====================================================================
 
-    def _sample_noisy_profiles(self) -> None:
-        """Build per-episode noisy D/G arrays from the original profiles.
+    def _parse_sigma(self, value, name):
+        """Normalize a sigma spec into a float array of shape (n_agents,).
 
-        If profile_noise_std == 0 the originals are used unchanged.
-        Noise is multiplicative and relative: noisy = original * (1 + std * noise),
-        then clipped to zero so values stay non-negative.
+        Accepts a scalar (broadcast to all agents), a list/tuple of length
+        n_agents (JSON order), or a dict keyed by agent name (missing agents
+        default to 0). Negative values are rejected.
         """
-        orig_D = np.array([ag.consumer_profile for ag in self.agents_all], dtype=np.float32)
-        orig_G = np.array([ag.generator_profile for ag in self.agents_all], dtype=np.float32)
+        agent_names = [ag.name for ag in self.agents_all]
 
-        if self.profile_noise_std <= 0.0:
-            self._noisy_D = orig_D
-            self._noisy_G = orig_G
-            return
+        if isinstance(value, dict):
+            unknown = set(value) - set(agent_names)
+            if unknown:
+                raise ValueError(
+                    f"{name}: unknown agent name(s) {sorted(unknown)}. "
+                    f"Valid: {agent_names}"
+                )
+            arr = np.array([float(value.get(n, 0.0)) for n in agent_names], dtype=np.float32)
+        elif isinstance(value, (list, tuple, np.ndarray)):
+            if len(value) != self.n_agents:
+                raise ValueError(
+                    f"{name}: list must have length n_agents={self.n_agents}, got {len(value)}"
+                )
+            arr = np.asarray(value, dtype=np.float32).reshape(-1)
+        else:
+            arr = np.full(self.n_agents, float(value), dtype=np.float32)
 
-        shape = (self.n_agents, self.num_hours)
-        if self.profile_noise_type == "gaussian":
-            noise_D = self._rng_np.standard_normal(shape).astype(np.float32)
-            noise_G = self._rng_np.standard_normal(shape).astype(np.float32)
+        if np.any(arr < 0.0):
+            raise ValueError(f"{name}: sigma values must be >= 0")
+        return arr
+
+    def _resolve_profile_mode(self, explicit_mode):
+        """Return (profile_mode, sigma_gen, sigma_dem) for the episode source.
+
+        sigma_gen / sigma_dem are per-agent float arrays of shape (n_agents,).
+        Priority: explicit profile_mode > (train_regime, phase) mapping > legacy.
+        """
+        zeros = np.zeros(self.n_agents, dtype=np.float32)
+
+        if explicit_mode is not None:
+            mode = str(explicit_mode).lower()
+            if mode not in ("forecast", "reality", "randomized"):
+                raise ValueError(
+                    "profile_mode must be 'forecast', 'reality', or 'randomized'"
+                )
+            if mode == "randomized":
+                return mode, self.sigma_train_gen, self.sigma_train_dem
+            if mode == "reality":
+                return mode, self.sigma_reality_gen, self.sigma_reality_dem
+            return mode, zeros, zeros
+
+        if self.train_regime is not None:
+            if self.phase == "eval":
+                # Every regime is deployed on the reality.
+                return "reality", self.sigma_reality_gen, self.sigma_reality_dem
+            # phase == "train"
+            if self.train_regime == "oracle":
+                return "reality", self.sigma_reality_gen, self.sigma_reality_dem
+            if self.train_regime == "naive":
+                return "forecast", zeros, zeros
+            return "randomized", self.sigma_train_gen, self.sigma_train_dem  # dr
+
+        # No regime: backward-compatible behaviour.
+        if self._legacy_noise_std > 0.0:
+            legacy = np.full(self.n_agents, self._legacy_noise_std, dtype=np.float32)
+            return "randomized", legacy, legacy
+        return "forecast", zeros, zeros
+
+    def _apply_profile_noise(self, base_D, base_G, rng, *, sigma_gen, sigma_dem):
+        """Multiplicative, relative, non-negative forecast error, PER AGENT.
+
+            noisy[i] = base[i] * (1 + sigma[i] * xi),   xi ~ N(0,1) or U(-1,1)
+
+        sigma_gen / sigma_dem are arrays of shape (n_agents,), reshaped to
+        (n_agents, 1) so each agent's error scales with its own magnitude AND its
+        own sigma. A dispatchable diesel unit (sigma~0) stays essentially exact;
+        a variable resource (large sigma) fluctuates. The multiplicative form
+        keeps the error proportional to output, so it vanishes where the profile
+        is zero. With every sigma at zero the base profile is returned unchanged.
+        """
+        sigma_gen = np.asarray(sigma_gen, dtype=np.float32).reshape(-1)
+        sigma_dem = np.asarray(sigma_dem, dtype=np.float32).reshape(-1)
+
+        if not (np.any(sigma_gen > 0.0) or np.any(sigma_dem > 0.0)):
+            return base_D.copy(), base_G.copy()
+
+        # (n_agents, 1) broadcasts across the hour axis of base (n_agents, H).
+        s_dem = sigma_dem[:, None]
+        s_gen = sigma_gen[:, None]
+
+        if self.noise_dist == "gaussian":
+            xi_D = rng.standard_normal(base_D.shape).astype(np.float32)
+            xi_G = rng.standard_normal(base_G.shape).astype(np.float32)
         else:  # uniform
-            noise_D = self._rng_np.uniform(-1.0, 1.0, size=shape).astype(np.float32)
-            noise_G = self._rng_np.uniform(-1.0, 1.0, size=shape).astype(np.float32)
+            xi_D = rng.uniform(-1.0, 1.0, size=base_D.shape).astype(np.float32)
+            xi_G = rng.uniform(-1.0, 1.0, size=base_G.shape).astype(np.float32)
 
-        self._noisy_D = np.clip(orig_D * (1.0 + self.profile_noise_std * noise_D), 0.0, None)
-        self._noisy_G = np.clip(orig_G * (1.0 + self.profile_noise_std * noise_G), 0.0, None)
+        noisy_D = np.clip(base_D * (1.0 + s_dem * xi_D), 0.0, None).astype(np.float32)
+        noisy_G = np.clip(base_G * (1.0 + s_gen * xi_G), 0.0, None).astype(np.float32)
+        return noisy_D, noisy_G
+
+    def _set_active_profiles(self) -> None:
+        """Select the (D, G) profile for the episode about to start.
+
+        - forecast / reality: frozen, assigned for clarity.
+        - randomized: a fresh draw from the ADVANCING noise stream, so each
+          training episode is a different day around the forecast. This is what
+          forces the policy to condition on state instead of memorizing the clock.
+        """
+        if self.profile_mode == "randomized":
+            self._active_D, self._active_G = self._apply_profile_noise(
+                self._forecast_D, self._forecast_G, self._noise_rng,
+                sigma_gen=self._sigma_gen, sigma_dem=self._sigma_dem,
+            )
+        elif self.profile_mode == "reality":
+            self._active_D, self._active_G = self._reality_D, self._reality_G
+        else:  # forecast
+            self._active_D, self._active_G = self._forecast_D, self._forecast_G
 
     def _role_str_idx(self, idx: int) -> str:
         if self.role[idx] == 1:

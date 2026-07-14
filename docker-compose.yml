@@ -1,5 +1,6 @@
 services:
   marlgrid:
+    user: "${UID}:${GID}"
     # Construye el entorno desde tu Dockerfile.rllib usando el repo local como contexto.
     build:
       context: .
